@@ -48,23 +48,25 @@ export default function SalesDashboard() {
     return Number.isInteger(r) ? String(r) : r.toFixed(2).replace(/0+$/, "").replace(/\.$/, "");
   };
 
+  // ---- 讀取清單（防呆）
   const drinks = inventory?.store?.drinks || { espresso: [], singleOrigin: [] };
   const products =
     activeTab === "drinks" ? (drinks as any)[drinkSubTab] || [] : inventory?.store?.HandDrip || [];
 
+  // ---- 豆子依「同名」分組，並依 grams 排序（全程 Array 安全）
   const beanGroups = useMemo(() => {
     if (activeTab === "drinks") return [] as Array<[string, any[]]>;
     const map = new Map<string, any[]>();
-    for (const it of products) {
-      const key = (it.name || "").trim();
+    for (const it of (Array.isArray(products) ? products : [])) {
+      const key = (it?.name || "").trim();
       if (!map.has(key)) map.set(key, []);
       map.get(key)!.push(it);
     }
     return Array.from(map.entries()).map(([name, variants]) => [
       name,
-      variants
-        .filter((v: any) => Number.isFinite(Number(v.grams)))
-        .sort((a: any, b: any) => (a.grams || 0) - (b.grams || 0))
+      (Array.isArray(variants) ? variants : [])
+        .filter((v: any) => Number.isFinite(Number(v?.grams)))
+        .sort((a: any, b: any) => (Number(a?.grams) || 0) - (Number(b?.grams) || 0))
     ]) as Array<[string, any[]]>;
   }, [activeTab, products]);
 
@@ -148,8 +150,8 @@ export default function SalesDashboard() {
     if (!Number.isFinite(parsed) || parsed <= 0) return;
 
     const isDrink = activeTab === "drinks";
-    const g = isDrink ? 0 : Number(grams ?? item.grams ?? 0);
-    const usage = isDrink ? Number(item.usagePerCup ?? 0.02) : 0;
+    const g = isDrink ? 0 : Number(grams ?? item?.grams ?? 0);
+    const usage = isDrink ? Number(item?.usagePerCup ?? 0.02) : 0;
     const deductKg = isDrink ? parsed * usage : (g * parsed) / 1000;
 
     setCart((prev) => {
@@ -202,7 +204,7 @@ export default function SalesDashboard() {
 
           const per = p.category === "drinks"
             ? p.usagePerCup        // DrinkCartItem 一定有 usagePerCup
-            : p.grams / 1000;      // BeanCartItem 一定有 grams
+            : (Number(p.grams) || 0) / 1000; // BeanCartItem 一定有 grams
 
           return { ...p, qty: newQty, deductKg: per * newQty };
         })
@@ -278,7 +280,7 @@ export default function SalesDashboard() {
                   </thead>
                   <tbody>
                     {activeTab === "drinks"
-                      ? (products || []).map((item: any) => (
+                      ? (Array.isArray(products) ? products : []).map((item: any) => (
                           <tr
                             key={item.id}
                             className="border-t border-gray-200 hover:bg-red-50 cursor-pointer"
@@ -333,7 +335,7 @@ export default function SalesDashboard() {
                     </tr>
                   </thead>
                   <tbody>
-                    {(products || []).map((item: any) => (
+                    {(Array.isArray(products) ? products : []).map((item: any) => (
                       <tr key={item.id} className="border-t border-gray-200">
                         <td className="px-3 py-2 font-semibold truncate" title={item.name}>
                           {item.name}
@@ -545,7 +547,7 @@ export default function SalesDashboard() {
                 </p>
                 <PosButton
                   variant="confirm"
-                  className="!bg-white !text-black !border !border-gray-300 shadow-md hover:!bg-gray-100 active:!bg-gray-200 focus:!ring-2 focus:!ring-black"
+                  className="!bg白 !text-black !border !border-gray-300 shadow-md hover:!bg-gray-100 active:!bg-gray-200 focus:!ring-2 focus:!ring-black"
                   style={{ colorScheme: "light" }}
                   onClick={handleCheckout}
                   disabled={cart.length === 0 || !paymentMethod}
