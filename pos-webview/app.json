@@ -1,0 +1,33 @@
+{
+  "expo": {
+    "name": "POS WebView",
+    "slug": "pos-webview",
+    "version": "1.0.0",
+    "scheme": "poswebview",
+    "userInterfaceStyle": "light",
+    "ios": {
+      "bundleIdentifier": "com.ivan00117.poswebview",
+      "supportsTablet": false,
+      "infoPlist": {
+        "NSAppTransportSecurity": {
+          "NSExceptionDomains": {
+            "192.168.3.170": {
+              "NSExceptionAllowsInsecureHTTPLoads": true,
+              "NSIncludesSubdomains": true
+            }
+          }
+        },
+        "ITSAppUsesNonExemptEncryption": false
+      }
+    },
+    "plugins": [
+      "expo-router"
+    ],
+    "extra": {
+      "router": {},
+      "eas": {
+        "projectId": "a93c3534-9a89-4bdf-b07f-011a9624f116"
+      }
+    }
+  }
+}
