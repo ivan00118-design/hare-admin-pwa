@@ -1,21 +1,15 @@
-// src/pages/InventoryPage.tsx
 import React, { useState } from "react";
-/* @ts-ignore */ import { InventoryProvider } from "./context/InventoryContext";
+import { useAppState, type DrinkSubKey, type DrinkProduct } from "../context/AppState";
 /* @ts-ignore */ import PosButton from "../../components/PosButton.jsx";
 
-type DrinkSubKey = "espresso" | "singleOrigin";
-
-type Product = {
-  id: string;
-  name: string;
-  stock: number;
-  price: number;
-  usagePerCup?: number;
-};
-
 export default function InventoryPage() {
-  const { inventory, setInventory, addProduct, deleteProduct } = (useInventory() as any);
-  const drinks: Record<DrinkSubKey, Product[]> = (inventory?.store?.drinks || {}) as any;
+  const { inventory, setInventory } = useAppState();
+
+  // 安全地取出 drinks 陣列
+  const drinks: Record<DrinkSubKey, DrinkProduct[]> = {
+    espresso: Array.isArray(inventory?.store?.drinks?.espresso) ? inventory.store.drinks.espresso : [],
+    singleOrigin: Array.isArray(inventory?.store?.drinks?.singleOrigin) ? inventory.store.drinks.singleOrigin : [],
+  };
 
   const [editMode, setEditMode] = useState(false);
   const [newProduct, setNewProduct] = useState({
@@ -28,33 +22,58 @@ export default function InventoryPage() {
   const handleChange = (
     subKey: DrinkSubKey,
     id: string,
-    field: keyof Product | "usagePerCup",
+    field: keyof DrinkProduct | "usagePerCup",
     value: string
   ) => {
-    setInventory((prev: any) => {
-      const updated = { ...prev };
+    setInventory((prev) => {
+      const next = typeof structuredClone === "function" ? structuredClone(prev) : JSON.parse(JSON.stringify(prev));
       const v = field === "name" ? value : parseFloat(value) || 0;
-      updated.store.drinks[subKey] = (updated.store.drinks[subKey] || []).map((item: Product) =>
-        item.id === id ? { ...item, [field]: v as any } : item
-      );
-      return updated;
+      const list = Array.isArray(next.store?.drinks?.[subKey]) ? next.store.drinks[subKey] : [];
+      next.store.drinks[subKey] = list.map((item: DrinkProduct) => (item.id === id ? { ...item, [field]: v as any } : item));
+      return next;
     });
   };
 
   const handleAdd = (subKey: DrinkSubKey) => {
-    if (!newProduct.name.trim()) return alert("請輸入商品名稱");
-    addProduct("drinks", subKey, { ...newProduct, unit: "kg" });
+    if (!(newProduct.name || "").trim()) return alert("請輸入商品名稱");
+    setInventory((prev) => {
+      const next = typeof structuredClone === "function" ? structuredClone(prev) : JSON.parse(JSON.stringify(prev));
+      const list = Array.isArray(next.store?.drinks?.[subKey]) ? next.store.drinks[subKey] : [];
+      // 避免重複名稱
+      const nameKey = newProduct.name.trim().toLowerCase();
+      if (list.some((p: any) => (p?.name || "").trim().toLowerCase() === nameKey)) return prev;
+
+      list.push({
+        id: crypto?.randomUUID ? crypto.randomUUID() : `${Date.now()}`,
+        name: newProduct.name.trim(),
+        stock: Number(newProduct.stock) || 0,
+        price: Number(newProduct.price) || 0,
+        usagePerCup: Number(newProduct.usagePerCup) || 0.02,
+        unit: "kg",
+      } as DrinkProduct);
+
+      next.store.drinks[subKey] = list;
+      return next;
+    });
     setNewProduct({ name: "", stock: 0, price: 0, usagePerCup: 0.02 });
   };
+
+  const handleDelete = (subKey: DrinkSubKey, id: string) => {
+    setInventory((prev) => {
+      const next = typeof structuredClone === "function" ? structuredClone(prev) : JSON.parse(JSON.stringify(prev));
+      const list = Array.isArray(next.store?.drinks?.[subKey]) ? next.store.drinks[subKey] : [];
+      next.store.drinks[subKey] = list.filter((p: any) => p.id !== id);
+      return next;
+    });
+  };
+
+  const fmtKg = (n: number) => (Number(n).toFixed(2));
 
   return (
     <div className="p-6 bg-gray-50 min-h-screen">
       <div className="flex justify-between items-center mb-6">
         <h1 className="text-2xl font-extrabold text-black">Inventory Management</h1>
-        <PosButton
-          variant={editMode ? "black" : "red"}
-          onClick={() => setEditMode(!editMode)}
-        >
+        <PosButton variant={editMode ? "black" : "red"} onClick={() => setEditMode(!editMode)}>
           {editMode ? "💾 Save" : "✏️ Edit Mode"}
         </PosButton>
       </div>
@@ -76,7 +95,7 @@ export default function InventoryPage() {
               </tr>
             </thead>
             <tbody>
-              {(drinks[subKey] || []).map((item) => (
+              {(Array.isArray(drinks[subKey]) ? drinks[subKey] : []).map((item) => (
                 <tr key={item.id} className="border-t border-gray-200 hover:bg-red-50">
                   <td className="px-4 py-3 font-semibold">
                     {editMode ? (
@@ -100,7 +119,7 @@ export default function InventoryPage() {
                         className="w-24 border border-[#dc2626] rounded text-center"
                       />
                     ) : (
-                      Number(item.stock).toFixed(2)
+                      fmtKg(item.stock)
                     )}
                   </td>
                   <td className="px-4 py-3 text-center">
@@ -122,9 +141,7 @@ export default function InventoryPage() {
                         type="number"
                         step="0.001"
                         value={item.usagePerCup ?? 0.02}
-                        onChange={(e) =>
-                          handleChange(subKey, item.id, "usagePerCup", e.target.value)
-                        }
+                        onChange={(e) => handleChange(subKey, item.id, "usagePerCup", e.target.value)}
                         className="w-24 border border-[#dc2626] rounded text-center"
                       />
                     ) : (
@@ -133,10 +150,7 @@ export default function InventoryPage() {
                   </td>
                   <td className="px-4 py-3 text-center">
                     {editMode && (
-                      <PosButton
-                        variant="black"
-                        onClick={() => deleteProduct("drinks", subKey, item.id)}
-                      >
+                      <PosButton variant="black" onClick={() => handleDelete(subKey, item.id)}>
                         🗑 Delete
                       </PosButton>
                     )}
@@ -160,18 +174,14 @@ export default function InventoryPage() {
                 type="number"
                 placeholder="Stock"
                 value={newProduct.stock}
-                onChange={(e) =>
-                  setNewProduct((prev) => ({ ...prev, stock: parseFloat(e.target.value) || 0 }))
-                }
+                onChange={(e) => setNewProduct((prev) => ({ ...prev, stock: parseFloat(e.target.value) || 0 }))}
                 className="border border-[#dc2626] rounded p-1 w-24"
               />
               <input
                 type="number"
                 placeholder="Price"
                 value={newProduct.price}
-                onChange={(e) =>
-                  setNewProduct((prev) => ({ ...prev, price: parseFloat(e.target.value) || 0 }))
-                }
+                onChange={(e) => setNewProduct((prev) => ({ ...prev, price: parseFloat(e.target.value) || 0 }))}
                 className="border border-[#dc2626] rounded p-1 w-20"
               />
               <input
@@ -179,17 +189,10 @@ export default function InventoryPage() {
                 step="0.001"
                 placeholder="Usage (kg)"
                 value={newProduct.usagePerCup}
-                onChange={(e) =>
-                  setNewProduct((prev) => ({
-                    ...prev,
-                    usagePerCup: parseFloat(e.target.value) || 0,
-                  }))
-                }
+                onChange={(e) => setNewProduct((prev) => ({ ...prev, usagePerCup: parseFloat(e.target.value) || 0 }))}
                 className="border border-[#dc2626] rounded p-1 w-28"
               />
-              <PosButton variant="red" onClick={() => handleAdd(subKey)}>
-                ➕ Add
-              </PosButton>
+              <PosButton variant="red" onClick={() => handleAdd(subKey)}>➕ Add</PosButton>
             </div>
           )}
         </div>

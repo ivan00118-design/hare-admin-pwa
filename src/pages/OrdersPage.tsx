@@ -1,6 +1,5 @@
-// src/pages/OrdersPage.tsx
 import React from "react";
-import { useInventory } from "../context/InventoryContext";
+import { useAppState } from "../context/AppState";
 
 const fmtMoney = (n: any) => {
   const v = Number(n) || 0;
@@ -9,7 +8,7 @@ const fmtMoney = (n: any) => {
 };
 
 export default function OrdersPage() {
-  const { orders } = useInventory();
+  const { orders = [] } = useAppState();
 
   return (
     <div className="p-4">
@@ -29,16 +28,26 @@ export default function OrdersPage() {
             <tbody>
               {orders.map((o) => (
                 <tr key={o.id} className="border-t">
-                  <td className="px-3 py-2 whitespace-nowrap">{new Date(o.createdAt).toLocaleString()}</td>
+                  <td className="px-3 py-2 whitespace-nowrap">
+                    {o.createdAt ? new Date(o.createdAt).toLocaleString() : "—"}
+                  </td>
                   <td className="px-3 py-2">
-                    <ul className="list-disc pl-5 space-y-1">
-                      {o.items.map((it, i) => (
-                        <li key={i}>
-                          {it.name}
-                          {it.category === "drinks" && it.subKey ? ` (${it.subKey === "espresso" ? "Espresso" : "Single Origin"})` : it.grams ? ` (${it.grams}g)` : ""} × {it.qty} @ {fmtMoney(it.price)}
-                        </li>
-                      ))}
-                    </ul>
+                    {!Array.isArray(o.items) || o.items.length === 0 ? (
+                      <span className="text-gray-400">—</span>
+                    ) : (
+                      <ul className="list-disc pl-5 space-y-1">
+                        {o.items.map((it, i) => (
+                          <li key={i}>
+                            {it.name}
+                            {it.category === "drinks" && it.subKey
+                              ? ` (${it.subKey === "espresso" ? "Espresso" : "Single Origin"})`
+                              : it.grams
+                              ? ` (${it.grams}g)`
+                              : ""} × {it.qty} @ {fmtMoney(it.price)}
+                          </li>
+                        ))}
+                      </ul>
+                    )}
                   </td>
                   <td className="px-3 py-2 text-right font-bold text-red-600">$ {fmtMoney(o.total)}</td>
                 </tr>
