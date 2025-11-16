@@ -1,6 +1,4 @@
-import React, {
-  createContext, useContext, useEffect, useMemo, useRef, useState,
-} from "react";
+import React, { createContext, useContext, useEffect, useMemo, useRef, useState } from "react";
 import { supabase } from "../supabaseClient";
 
 export type Category = "drinks" | "HandDrip";
@@ -42,8 +40,11 @@ type Ctx = {
   inventory: Inventory;
   orders: Order[];
   setInventory: (updaterOrValue: Inventory | ((prev: Inventory) => Inventory)) => void;
-  addProduct: (category: Category, subKey: DrinkSubKey | null,
-               data: Partial<DrinkProduct & BeanProduct> & { name: string; price: number; grams?: number }) => void;
+  addProduct: (
+    category: Category,
+    subKey: DrinkSubKey | null,
+    data: Partial<DrinkProduct & BeanProduct> & { name: string; price: number; grams?: number }
+  ) => void;
   deleteProduct: (category: Category, subKey: DrinkSubKey | null, id: string) => void;
   sellItem: (category: Category, subKey: DrinkSubKey | null, id: string, deductKg: number) => void;
   createOrder: (cart: CartItem[], totalAmount: number, extra?: { paymentMethod?: string }) => string | null;
@@ -74,9 +75,11 @@ function normalizeInventory(v: any): Inventory {
   return { store: { drinks: { espresso, singleOrigin }, HandDrip: handDrip } };
 }
 
-// 以 select→update/insert 寫入 app_state（完全避免 on_conflict）
+// -------- 以 select→update/insert 寫入 app_state（完全避免 on_conflict）--------
 async function saveAppState(orgId: string | null, key: "pos_inventory" | "pos_orders", value: unknown) {
   if (!orgId) return;
+
+  // 先查是否存在
   const { data: exists, error: selErr } = await supabase
     .from("app_state")
     .select("org_id,key")
@@ -84,6 +87,7 @@ async function saveAppState(orgId: string | null, key: "pos_inventory" | "pos_or
     .eq("key", key)
     .maybeSingle();
 
+  // 非「找不到」的錯誤才記錄
   if (selErr && (selErr as any).code !== "PGRST116") {
     console.error("[app_state select]", key, selErr);
     return;
@@ -92,14 +96,14 @@ async function saveAppState(orgId: string | null, key: "pos_inventory" | "pos_or
   if (exists) {
     const { error: updErr } = await supabase
       .from("app_state")
-      .update({ state: value })
+      .update({ state: value }) // ← 統一使用 state 欄位
       .eq("org_id", orgId)
       .eq("key", key);
     if (updErr) console.error("[app_state update]", key, updErr);
   } else {
     const { error: insErr } = await supabase
       .from("app_state")
-      .insert([{ org_id: orgId, key, state: value }]);
+      .insert([{ org_id: orgId, key, state: value }]); // ← 第一次建立
     if (insErr) console.error("[app_state insert]", key, insErr);
   }
 }
@@ -132,7 +136,7 @@ export function InventoryProvider({ children }: { children: React.ReactNode }) {
 
       if (!oid) { setReady(true); return; }
 
-      // 讀取 app_state（以 state jsonb 為主）
+      // 讀取 app_state（使用 state jsonb）
       const [{ data: invRow }, { data: ordRow }] = await Promise.all([
         supabase.from("app_state").select("state").eq("org_id", oid).eq("key", "pos_inventory").maybeSingle(),
         supabase.from("app_state").select("state").eq("org_id", oid).eq("key", "pos_orders").maybeSingle(),
@@ -143,7 +147,7 @@ export function InventoryProvider({ children }: { children: React.ReactNode }) {
         if (ordRow?.state) setOrders(Array.isArray(ordRow.state) ? ordRow.state : []);
       }
 
-      // Realtime：同 org 的 app_state 變更就同步
+      // Realtime：同 org 的 app_state 變更就同步（使用 state）
       const channel = supabase
         .channel("realtime:app_state")
         .on(
