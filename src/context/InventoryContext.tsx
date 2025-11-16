@@ -1,4 +1,3 @@
-// src/context/InventoryContext.tsx
 import React, {
   createContext, useContext, useEffect, useMemo, useRef, useState,
 } from "react";
@@ -75,6 +74,36 @@ function normalizeInventory(v: any): Inventory {
   return { store: { drinks: { espresso, singleOrigin }, HandDrip: handDrip } };
 }
 
+// 以 select→update/insert 寫入 app_state（完全避免 on_conflict）
+async function saveAppState(orgId: string | null, key: "pos_inventory" | "pos_orders", value: unknown) {
+  if (!orgId) return;
+  const { data: exists, error: selErr } = await supabase
+    .from("app_state")
+    .select("org_id,key")
+    .eq("org_id", orgId)
+    .eq("key", key)
+    .maybeSingle();
+
+  if (selErr && (selErr as any).code !== "PGRST116") {
+    console.error("[app_state select]", key, selErr);
+    return;
+  }
+
+  if (exists) {
+    const { error: updErr } = await supabase
+      .from("app_state")
+      .update({ state: value })
+      .eq("org_id", orgId)
+      .eq("key", key);
+    if (updErr) console.error("[app_state update]", key, updErr);
+  } else {
+    const { error: insErr } = await supabase
+      .from("app_state")
+      .insert([{ org_id: orgId, key, state: value }]);
+    if (insErr) console.error("[app_state insert]", key, insErr);
+  }
+}
+
 export function InventoryProvider({ children }: { children: React.ReactNode }) {
   const [orgId, setOrgId] = useState<string | null>(null);
   const [ready, setReady] = useState(false);
@@ -103,15 +132,15 @@ export function InventoryProvider({ children }: { children: React.ReactNode }) {
 
       if (!oid) { setReady(true); return; }
 
-      // 讀取 app_state
+      // 讀取 app_state（以 state jsonb 為主）
       const [{ data: invRow }, { data: ordRow }] = await Promise.all([
-        supabase.from("app_state").select("value").eq("org_id", oid).eq("key", "pos_inventory").maybeSingle(),
-        supabase.from("app_state").select("value").eq("org_id", oid).eq("key", "pos_orders").maybeSingle(),
+        supabase.from("app_state").select("state").eq("org_id", oid).eq("key", "pos_inventory").maybeSingle(),
+        supabase.from("app_state").select("state").eq("org_id", oid).eq("key", "pos_orders").maybeSingle(),
       ]);
 
       if (!disposed) {
-        if (invRow?.value) setInventoryState(normalizeInventory(invRow.value));
-        if (ordRow?.value) setOrders(Array.isArray(ordRow.value) ? ordRow.value : []);
+        if (invRow?.state) setInventoryState(normalizeInventory(invRow.state));
+        if (ordRow?.state) setOrders(Array.isArray(ordRow.state) ? ordRow.state : []);
       }
 
       // Realtime：同 org 的 app_state 變更就同步
@@ -122,11 +151,11 @@ export function InventoryProvider({ children }: { children: React.ReactNode }) {
           { event: "*", schema: "public", table: "app_state", filter: `org_id=eq.${oid}` },
           (payload: any) => {
             const row = payload.new || payload.old || {};
-            if (row.key === "pos_inventory" && row.value) {
-              setInventoryState(normalizeInventory(row.value));
+            if (row.key === "pos_inventory" && row.state) {
+              setInventoryState(normalizeInventory(row.state));
             }
-            if (row.key === "pos_orders" && row.value) {
-              setOrders(Array.isArray(row.value) ? row.value : []);
+            if (row.key === "pos_orders" && row.state) {
+              setOrders(Array.isArray(row.state) ? row.state : []);
             }
           }
         );
@@ -141,22 +170,13 @@ export function InventoryProvider({ children }: { children: React.ReactNode }) {
   }, []);
 
   // ---- persist helpers ----
-  const upsertState = async (key: "pos_inventory" | "pos_orders", value: unknown) => {
-    if (!orgId) return;
-    const { error } = await supabase
-      .from("app_state")
-      .upsert({ org_id: orgId, key, value }, { onConflict: "org_id,key" });
-    if (error) console.error("[app_state upsert]", key, error);
-  };
-
-  // ---- API: setInventory（會自動 upsert）----
   const setInventory: Ctx["setInventory"] = (updaterOrValue) => {
     setInventoryState((prev) => {
       const next = typeof updaterOrValue === "function"
         ? (updaterOrValue as (p: Inventory) => Inventory)(prev)
         : updaterOrValue;
       // 非同步保存（idempotent）
-      upsertState("pos_inventory", next);
+      saveAppState(orgId, "pos_inventory", next);
       return next;
     });
   };
@@ -174,13 +194,13 @@ export function InventoryProvider({ children }: { children: React.ReactNode }) {
           price, usagePerCup: Number((data as any).usagePerCup) || 0.02, unit: "kg",
         };
         const key = (subKey || "espresso") as DrinkSubKey;
-        next.store.drinks[key] = [...(next.store.drinks[key] || []), item];
+        next.store.drinks[key] = [...(Array.isArray(next.store.drinks[key]) ? next.store.drinks[key] : []), item];
       } else {
         const item: BeanProduct = {
           id, name: (data.name || "").trim(), stock: Number(data.stock) || 0,
           price, grams: Number((data as any).grams) || 250, unit: "kg",
         };
-        next.store.HandDrip = [...(next.store.HandDrip || []), item];
+        next.store.HandDrip = [...(Array.isArray(next.store.HandDrip) ? next.store.HandDrip : []), item];
       }
       return next;
     });
@@ -191,9 +211,9 @@ export function InventoryProvider({ children }: { children: React.ReactNode }) {
       const next = normalizeInventory(prev);
       if (category === "drinks") {
         const key = (subKey || "espresso") as DrinkSubKey;
-        next.store.drinks[key] = (next.store.drinks[key] || []).filter((p) => p.id !== id);
+        next.store.drinks[key] = (Array.isArray(next.store.drinks[key]) ? next.store.drinks[key] : []).filter((p) => p.id !== id);
       } else {
-        next.store.HandDrip = (next.store.HandDrip || []).filter((p) => p.id !== id);
+        next.store.HandDrip = (Array.isArray(next.store.HandDrip) ? next.store.HandDrip : []).filter((p) => p.id !== id);
       }
       return next;
     });
@@ -205,11 +225,11 @@ export function InventoryProvider({ children }: { children: React.ReactNode }) {
       const minus = Math.max(0, Number(deductKg) || 0);
       if (category === "drinks") {
         const key = (subKey || "espresso") as DrinkSubKey;
-        next.store.drinks[key] = (next.store.drinks[key] || []).map((p) =>
+        next.store.drinks[key] = (Array.isArray(next.store.drinks[key]) ? next.store.drinks[key] : []).map((p) =>
           p.id === id ? { ...p, stock: Math.max(0, (Number(p.stock) || 0) - minus) } : p
         );
       } else {
-        next.store.HandDrip = (next.store.HandDrip || []).map((p) =>
+        next.store.HandDrip = (Array.isArray(next.store.HandDrip) ? next.store.HandDrip : []).map((p) =>
           p.id === id ? { ...p, stock: Math.max(0, (Number(p.stock) || 0) - minus) } : p
         );
       }
@@ -231,11 +251,11 @@ export function InventoryProvider({ children }: { children: React.ReactNode }) {
       );
       if (it.category === "drinks") {
         const key = (it.subKey || "espresso") as DrinkSubKey;
-        next.store.drinks[key] = (next.store.drinks[key] || []).map((p) =>
+        next.store.drinks[key] = (Array.isArray(next.store.drinks[key]) ? next.store.drinks[key] : []).map((p) =>
           p.id === it.id ? { ...p, stock: (Number(p.stock) || 0) - minus } : p
         );
       } else {
-        next.store.HandDrip = (next.store.HandDrip || []).map((p) =>
+        next.store.HandDrip = (Array.isArray(next.store.HandDrip) ? next.store.HandDrip : []).map((p) =>
           p.id === it.id ? { ...p, stock: (Number(p.stock) || 0) - minus } : p
         );
       }
@@ -270,9 +290,9 @@ export function InventoryProvider({ children }: { children: React.ReactNode }) {
     const nextOrders = [order, ...orders];
     setOrders(nextOrders);
 
-    // 後寫入（idempotent upsert）
-    upsertState("pos_inventory", next);
-    upsertState("pos_orders", nextOrders);
+    // 後寫入（避免 on_conflict）
+    saveAppState(orgId, "pos_inventory", next);
+    saveAppState(orgId, "pos_orders", nextOrders);
 
     return id;
   };
@@ -295,24 +315,24 @@ export function InventoryProvider({ children }: { children: React.ReactNode }) {
         );
         if (it.category === "drinks") {
           const key = (it.subKey || "espresso") as DrinkSubKey;
-          nextInv.store.drinks[key] = (nextInv.store.drinks[key] || []).map((p) =>
+          nextInv.store.drinks[key] = (Array.isArray(nextInv.store.drinks[key]) ? nextInv.store.drinks[key] : []).map((p) =>
             p.id === it.id ? { ...p, stock: (Number(p.stock) || 0) + plus } : p
           );
         } else {
-          nextInv.store.HandDrip = (nextInv.store.HandDrip || []).map((p) =>
+          nextInv.store.HandDrip = (Array.isArray(nextInv.store.HandDrip) ? nextInv.store.HandDrip : []).map((p) =>
             p.id === it.id ? { ...p, stock: (Number(p.stock) || 0) + plus } : p
           );
         }
       }
       setInventoryState(nextInv);
-      upsertState("pos_inventory", nextInv);
+      saveAppState(orgId, "pos_inventory", nextInv);
     }
 
     const updated = { ...target, voided: true, voidedAt: new Date().toISOString(), voidReason: reason };
     const nextOrders = orders.slice();
     nextOrders[idx] = updated;
     setOrders(nextOrders);
-    upsertState("pos_orders", nextOrders);
+    saveAppState(orgId, "pos_orders", nextOrders);
   };
 
   // ---- 工具：刪重（name+grams 同名合併）----
@@ -322,7 +342,7 @@ export function InventoryProvider({ children }: { children: React.ReactNode }) {
 
       const dedup = <T extends { id: string; name: string; grams?: number }>(arr: T[]) => {
         const m = new Map<string, T>();
-        for (const it of arr) {
+        for (const it of (Array.isArray(arr) ? arr : [])) {
           const k = `${(it.name || "").trim().toLowerCase()}|${Number(it.grams) || 0}`;
           if (!m.has(k)) m.set(k, it);
         }
