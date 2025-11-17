@@ -147,7 +147,7 @@ export default function InventoryPage() {
                         onChange={(e) => handleEdit(item.id, "usagePerCup", e.target.value)}
                         className="w-28 border rounded text-center"
                       />
-                    ) : `${((item.usagePerCup || 0.02) * 1000).toFixed(0)} g`}
+                    ) : `${((item.usagePerCup || 0.02) * 1000).toFixed(0)} g`
                   ) : (
                     editMode ? (
                       <input
