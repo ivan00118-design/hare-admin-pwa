@@ -1,7 +1,11 @@
 // src/pages/SalesDashboard.tsx
 import React, { useMemo, useRef, useState } from "react";
-import { supabase } from "../supabaseClient";
-import { useAppState, type Category, type DrinkSubKey, type UIItem } from "../context/AppState";
+import {
+  useAppState,
+  type Category,
+  type DrinkSubKey,
+  type UIItem,
+} from "../context/AppState";
 import PosButton from "../components/PosButton.jsx";
 
 import iconSimplePay from "../assets/payments/SimplePay.jpg";
@@ -12,16 +16,16 @@ import iconMacauPass from "../assets/payments/MacauPass.png";
 type DrinkCartItem = UIItem & {
   category: "drinks";
   subKey: DrinkSubKey;
-  usagePerCup: number;   // 每杯耗豆(kg)
-  grams?: null;          // 飲品不使用 grams
+  usagePerCup: number; // 每杯耗豆(kg)
+  grams?: null;
   qty: number;
   deductKg?: number;
 };
 
 type BeanCartItem = UIItem & {
   category: "HandDrip";
-  subKey?: null;         // 豆子沒有子分類
-  grams: number;         // 包裝克數
+  subKey?: null;
+  grams: number; // 包裝克數
   qty: number;
   deductKg?: number;
 };
@@ -35,7 +39,7 @@ const fmt = (n: number) => {
 };
 
 export default function SalesDashboard() {
-  const { orgId, inventory, setInventory, createOrder, orders } = useAppState();
+  const { inventory, setInventory, createOrder } = useAppState();
 
   const [activeTab, setActiveTab] = useState<Category>("drinks");
   const [drinkSubTab, setDrinkSubTab] = useState<DrinkSubKey>("espresso");
@@ -43,22 +47,17 @@ export default function SalesDashboard() {
   const [editMode, setEditMode] = useState(false);
   const [paymentMethod, setPaymentMethod] = useState("");
 
-  // --- 外送面板狀態 ---
-  const [isDelivery, setIsDelivery] = useState(false);
-  const [deliveryName, setDeliveryName] = useState("");
-  const [deliveryPhone, setDeliveryPhone] = useState("");
-  const [deliveryAddress, setDeliveryAddress] = useState("");
-  const [deliveryFee, setDeliveryFee] = useState<number>(0);
-
   const PAYMENT_OPTIONS = [
     { key: "SimplePay", label: "SimplePay", icon: iconSimplePay },
     { key: "Cash", label: "Cash", icon: iconCash },
-    { key: "MacauPass", label: "MacauPass", icon: iconMacauPass }
-  ];
+    { key: "MacauPass", label: "MacauPass", icon: iconMacauPass },
+  ] as const;
 
-  const drinks = inventory?.store?.drinks || { espresso: [], singleOrigin: [] };
-  const products =
-    activeTab === "drinks" ? (drinks as any)[drinkSubTab] || [] : inventory?.store?.HandDrip || [];
+  const drinks = inventory?.store?.drinks || { espresso: [], singleOrigin: [] } as any;
+  const products: any[] =
+    activeTab === "drinks"
+      ? ((drinks as any)[drinkSubTab] || [])
+      : (inventory?.store?.HandDrip || []);
 
   const beanGroups = useMemo(() => {
     if (activeTab === "drinks") return [] as Array<[string, any[]]>;
@@ -70,9 +69,9 @@ export default function SalesDashboard() {
     }
     return Array.from(map.entries()).map(([name, variants]) => [
       name,
-      variants
-        .filter((v: any) => Number.isFinite(Number(v.grams)))
-        .sort((a: any, b: any) => (a.grams || 0) - (b.grams || 0))
+      (variants as any[])
+        .filter((v) => Number.isFinite(Number((v as any).grams)))
+        .sort((a: any, b: any) => (a.grams || 0) - (b.grams || 0)),
     ]) as Array<[string, any[]]>;
   }, [activeTab, products]);
 
@@ -87,19 +86,27 @@ export default function SalesDashboard() {
     stock: 0,
     price: 0,
     usagePerCup: 0.02,
-    grams: 250
+    grams: 250,
   });
 
-  const handleEditField = (category: Category, subKey: DrinkSubKey | null, id: string, field: string, value: string) => {
+  const handleEditField = (
+    category: Category,
+    subKey: DrinkSubKey | null,
+    id: string,
+    field: string,
+    value: string
+  ) => {
     setInventory((prev) => {
       const next = structuredClone(prev);
       const v = field === "name" ? value : parseFloat(value) || 0;
       if (category === "drinks") {
-        next.store.drinks[subKey as DrinkSubKey] = (next.store.drinks[subKey as DrinkSubKey] || []).map((it) =>
+        next.store.drinks[subKey as DrinkSubKey] = (next.store.drinks[subKey as DrinkSubKey] || []).map((it: any) =>
           it.id === id ? { ...it, [field]: v } : it
         );
       } else {
-        next.store.HandDrip = (next.store.HandDrip || []).map((it) => (it.id === id ? { ...it, [field]: v } : it));
+        next.store.HandDrip = (next.store.HandDrip || []).map((it: any) =>
+          it.id === id ? { ...it, [field]: v } : it
+        );
       }
       return next;
     });
@@ -119,7 +126,7 @@ export default function SalesDashboard() {
     setInventory((prev) => {
       const next = structuredClone(prev);
       if (activeTab === "drinks") {
-        const list = next.store.drinks[drinkSubTab] || [];
+        const list: any[] = next.store.drinks[drinkSubTab] || [];
         if (list.some((p) => (p.name || "").trim().toLowerCase() === name.toLowerCase())) return prev;
         list.push({
           id: crypto?.randomUUID ? crypto.randomUUID() : String(Date.now()),
@@ -127,11 +134,11 @@ export default function SalesDashboard() {
           stock: 0,
           price: Number(newProduct.price) || 0,
           unit: "kg",
-          usagePerCup: Number(newProduct.usagePerCup) || 0.02
+          usagePerCup: Number(newProduct.usagePerCup) || 0.02,
         });
         next.store.drinks[drinkSubTab] = list;
       } else {
-        const list = next.store.HandDrip || [];
+        const list: any[] = next.store.HandDrip || [];
         if (list.some((p) => (p.name || "").trim().toLowerCase() === name.toLowerCase() && Number(p.grams) === gramsVal))
           return prev;
         list.push({
@@ -140,7 +147,7 @@ export default function SalesDashboard() {
           stock: 0,
           price: Number(newProduct.price) || 0,
           unit: "kg",
-          grams: gramsVal
+          grams: gramsVal,
         });
         next.store.HandDrip = list;
       }
@@ -160,14 +167,14 @@ export default function SalesDashboard() {
     const usage = isDrink ? Number(item.usagePerCup ?? 0.02) : 0;
     const deductKg = isDrink ? parsed * usage : (g * parsed) / 1000;
 
-    setCart((prev) => {
+    setCart((prev: CartItem[]) => {
       const key = `${isDrink ? "drinks" : "HandDrip"}|${isDrink ? drinkSubTab : ""}|${item.id}|${g}`;
       const existed = prev.find(
-        (p) => `${p.category}|${p.subKey || ""}|${p.id}|${p.grams || 0}` === key
+        (p) => `${p.category}|${p.subKey || ""}|${p.id}|${(p as BeanCartItem).grams || 0}` === key
       );
       if (existed) {
-        return prev.map((p) =>
-          `${p.category}|${p.subKey || ""}|${p.id}|${p.grams || 0}` === key
+        return prev.map((p: CartItem) =>
+          `${p.category}|${p.subKey || ""}|${p.id}|${(p as BeanCartItem).grams || 0}` === key
             ? { ...p, qty: p.qty + parsed, deductKg: (p.deductKg || 0) + deductKg }
             : p
         );
@@ -181,7 +188,7 @@ export default function SalesDashboard() {
             usagePerCup: usage,
             grams: null,
             qty: parsed,
-            deductKg
+            deductKg,
           }
         : {
             ...(item as UIItem),
@@ -189,7 +196,7 @@ export default function SalesDashboard() {
             subKey: null,
             grams: g,
             qty: parsed,
-            deductKg
+            deductKg,
           };
 
       return [...prev, patch];
@@ -197,21 +204,20 @@ export default function SalesDashboard() {
   };
 
   const totalAmount = cart.reduce((s, i) => s + i.qty * (i.price || 30), 0);
-  const grandTotal = totalAmount + (isDelivery ? Math.max(0, Number(deliveryFee) || 0) : 0);
 
   // --------- 使用可判別聯合的 changeCartQty ----------
   const changeCartQty = (key: string, delta: number) => {
-    setCart((prev) =>
+    setCart((prev: CartItem[]) =>
       prev
-        .map((p) => {
-          const k = `${p.category}|${p.subKey || ""}|${p.id}|${p.grams || 0}`;
+        .map((p: CartItem) => {
+          const k = `${p.category}|${p.subKey || ""}|${p.id}|${(p as BeanCartItem).grams || 0}`;
           if (k !== key) return p;
           const newQty = p.qty + delta;
-          if (newQty <= 0) return null as any;
+          if (newQty <= 0) return null as unknown as CartItem;
 
           const per = p.category === "drinks"
-            ? p.usagePerCup        // DrinkCartItem 一定有 usagePerCup
-            : p.grams / 1000;      // BeanCartItem 一定有 grams
+            ? (p as DrinkCartItem).usagePerCup
+            : ((p as BeanCartItem).grams / 1000);
 
           return { ...p, qty: newQty, deductKg: per * newQty };
         })
@@ -219,73 +225,13 @@ export default function SalesDashboard() {
     );
   };
 
-  // ---- 把訂單標記為外送並回寫 app_state.pos_orders ----
-  const markOrderAsDelivery = async (orderId: string) => {
-    if (!orgId) return;
-    const fee = Math.max(0, Number(deliveryFee) || 0);
-    const nextOrders = (Array.isArray(orders) ? orders : []).map((o: any) =>
-      o.id === orderId
-        ? {
-            ...o,
-            channel: "delivery",
-            delivery: {
-              status: "Pending",
-              name: deliveryName.trim(),
-              phone: deliveryPhone.trim(),
-              address: deliveryAddress.trim(),
-              fee
-            }
-          }
-        : o
-    );
-    const { error } = await supabase
-      .from("app_state")
-      .upsert([{ org_id: orgId, key: "pos_orders", state: nextOrders }]); // 不帶 on_conflict
-    if (error) {
-      console.error("[delivery mark upsert] ", error);
-      alert("外送資訊寫入失敗，請稍後再試");
-    }
-  };
-
   const handleCheckout = async () => {
     if (!paymentMethod) return alert("請先選擇支付方式（SimplePay / Cash / MacauPass）");
-
-    // 若勾選外送，將外送費作為一個專用品項加進購物車（不改動資料結構）
-    let cartToPay = cart.slice();
-    const fee = Math.max(0, Number(deliveryFee) || 0);
-    if (isDelivery && fee > 0) {
-      const feeItem: BeanCartItem = {
-        id: "delivery-fee",
-        name: "Delivery Fee",
-        price: fee,
-        grams: 0,
-        stock: 0,
-        unit: "kg",
-        category: "HandDrip",
-        subKey: null,
-        qty: 1,
-        deductKg: 0
-      } as any;
-      cartToPay = [...cartToPay, feeItem];
-    }
-
-    const id = await createOrder(cartToPay, grandTotal, { paymentMethod });
+    const id = await createOrder(cart, totalAmount, { paymentMethod });
     if (!id) return;
-
-    if (isDelivery) {
-      await markOrderAsDelivery(id);
-    }
-
-    alert(`✅ 訂單完成${isDelivery ? "（外送）" : ""}（付款方式：${paymentMethod}）`);
+    alert(`✅ Order Completed（付款方式：${paymentMethod}）`);
     setCart([]);
     setPaymentMethod("");
-    if (isDelivery) {
-      setIsDelivery(false);
-      setDeliveryName("");
-      setDeliveryPhone("");
-      setDeliveryAddress("");
-      setDeliveryFee(0);
-    }
   };
 
   return (
@@ -347,7 +293,7 @@ export default function SalesDashboard() {
                   </thead>
                   <tbody>
                     {activeTab === "drinks"
-                      ? (products || []).map((item: any) => (
+                      ? (products as any[]).map((item: any) => (
                           <tr
                             key={item.id}
                             className="border-t border-gray-200 hover:bg-red-50 cursor-pointer"
@@ -402,7 +348,7 @@ export default function SalesDashboard() {
                     </tr>
                   </thead>
                   <tbody>
-                    {(products || []).map((item: any) => (
+                    {(products as any[]).map((item: any) => (
                       <tr key={item.id} className="border-t border-gray-200">
                         <td className="px-3 py-2 font-semibold truncate" title={item.name}>
                           {item.name}
@@ -412,7 +358,9 @@ export default function SalesDashboard() {
                             type="number"
                             step="1"
                             value={item.price}
-                            onChange={(e) => handleEditField(activeTab, drinkSubTab, item.id, "price", e.target.value)}
+                            onChange={(e) =>
+                              handleEditField(activeTab, drinkSubTab, item.id, "price", e.target.value)
+                            }
                             className={cellInputCls}
                           />
                         </td>
@@ -432,7 +380,9 @@ export default function SalesDashboard() {
                               type="number"
                               step="1"
                               value={item.grams || 0}
-                              onChange={(e) => handleEditField("HandDrip", null, item.id, "grams", e.target.value)}
+                              onChange={(e) =>
+                                handleEditField("HandDrip", null, item.id, "grams", e.target.value)
+                              }
                               className={cellInputCls}
                             />
                           )}
@@ -446,10 +396,12 @@ export default function SalesDashboard() {
                                 const next = structuredClone(prev);
                                 if (activeTab === "drinks") {
                                   next.store.drinks[drinkSubTab] = (next.store.drinks[drinkSubTab] || []).filter(
-                                    (x) => x.id !== item.id
+                                    (x: any) => x.id !== item.id
                                   );
                                 } else {
-                                  next.store.HandDrip = (next.store.HandDrip || []).filter((x) => x.id !== item.id);
+                                  next.store.HandDrip = (next.store.HandDrip || []).filter(
+                                    (x: any) => x.id !== item.id
+                                  );
                                 }
                                 return next;
                               })
@@ -478,7 +430,9 @@ export default function SalesDashboard() {
                           step="1"
                           placeholder="Price"
                           value={newProduct.price}
-                          onChange={(e) => setNewProduct((p: any) => ({ ...p, price: parseFloat(e.target.value) || 0 }))}
+                          onChange={(e) =>
+                            setNewProduct((p: any) => ({ ...p, price: parseFloat(e.target.value) || 0 }))
+                          }
                           onKeyDown={(e) => e.key === "Enter" && handleAddProduct(e)}
                           className={cellInputCls}
                         />
@@ -499,7 +453,9 @@ export default function SalesDashboard() {
                         ) : (
                           <select
                             value={newProduct.grams}
-                            onChange={(e) => setNewProduct((p: any) => ({ ...p, grams: parseInt(e.target.value, 10) }))}
+                            onChange={(e) =>
+                              setNewProduct((p: any) => ({ ...p, grams: parseInt(e.target.value, 10) }))
+                            }
                             className={cellInputCls}
                           >
                             <option value={100}>100g</option>
@@ -522,7 +478,7 @@ export default function SalesDashboard() {
           </div>
         </div>
 
-        {/* 右側訂單摘要 + 外送面板 */}
+        {/* 右側訂單摘要 */}
         <div className="lg:col-span-7 min-w-0">
           <div className="bg-white shadow-xl rounded-xl p-4 border border-gray-200 h-full min-h-[420px] flex flex-col">
             <h2 className="text-xl font-extrabold text-black mb-3">Order Summary</h2>
@@ -545,16 +501,16 @@ export default function SalesDashboard() {
                     </tr>
                   </thead>
                   <tbody>
-                    {cart.map((item) => {
-                      const key = `${item.category}|${item.subKey || ""}|${item.id}|${item.grams || 0}`;
+                    {cart.map((item: CartItem) => {
+                      const key = `${item.category}|${item.subKey || ""}|${item.id}|${(item as BeanCartItem).grams || 0}`;
                       return (
                         <tr key={key} className="border-t border-gray-200 hover:bg-red-50">
                           <td className="px-4 py-3 font-semibold">
                             {item.name}
                             {item.category === "drinks" && item.subKey
                               ? ` (${item.subKey === "espresso" ? "Espresso" : "Single Origin"})`
-                              : item.grams
-                              ? ` (${item.grams}g)`
+                              : (item as BeanCartItem).grams
+                              ? ` ${(item as BeanCartItem).grams}g`
                               : ""}
                           </td>
                           <td className="px-4 py-3 text-center">
@@ -567,13 +523,6 @@ export default function SalesDashboard() {
                                 −
                               </PosButton>
                               <span className="inline-block min-w-[2rem] text-center">{item.qty}</span>
-                              <PosButton
-                                variant="black"
-                                className="px-2 py-1 text-xs !text-black hover:!text-black focus:!text-black"
-                                onClick={() => changeCartQty(key, +1)}
-                              >
-                                +
-                              </PosButton>
                             </div>
                           </td>
                           <td className="px-4 py-3 text-center text-[#dc2626] font-extrabold whitespace-nowrap">
@@ -586,35 +535,6 @@ export default function SalesDashboard() {
                 </table>
               </div>
             )}
-
-            {/* 外送結帳小面板 */}
-            <div className="mt-4 rounded-lg border border-gray-200 bg-gray-50 p-3">
-              <label className="inline-flex items-center gap-2">
-                <input type="checkbox" checked={isDelivery} onChange={(e) => setIsDelivery(e.target.checked)} />
-                <span className="font-semibold">外送訂單</span>
-              </label>
-
-              {isDelivery && (
-                <div className="mt-3 grid grid-cols-1 md:grid-cols-2 gap-3">
-                  <div>
-                    <label className="block text-xs font-semibold text-gray-600 mb-1">收件人</label>
-                    <input className="w-full border rounded px-3 h-10" value={deliveryName} onChange={(e) => setDeliveryName(e.target.value)} />
-                  </div>
-                  <div>
-                    <label className="block text-xs font-semibold text-gray-600 mb-1">電話</label>
-                    <input className="w-full border rounded px-3 h-10" value={deliveryPhone} onChange={(e) => setDeliveryPhone(e.target.value)} />
-                  </div>
-                  <div className="md:col-span-2">
-                    <label className="block text-xs font-semibold text-gray-600 mb-1">地址</label>
-                    <textarea className="w-full border rounded px-3 py-2 min-h-[72px]" value={deliveryAddress} onChange={(e) => setDeliveryAddress(e.target.value)} />
-                  </div>
-                  <div>
-                    <label className="block text-xs font-semibold text-gray-600 mb-1">運費</label>
-                    <input type="number" min={0} step="1" className="w-full border rounded px-3 h-10" value={deliveryFee} onChange={(e) => setDeliveryFee(parseFloat(e.target.value) || 0)} />
-                  </div>
-                </div>
-              )}
-            </div>
 
             {/* 付款方式 + 結帳 */}
             <div className="mt-6 border-top pt-4">
@@ -632,7 +552,7 @@ export default function SalesDashboard() {
                         className={[
                           "h-12 w-24 rounded-lg bg-white border flex items-center justify-center",
                           "shadow-sm focus:outline-none focus-visible:ring-2 focus-visible:ring-red-500",
-                          selected ? "border-red-500 ring-2 ring-red-500" : "border-neutral-300 hover:border-neutral-400"
+                          selected ? "border-red-500 ring-2 ring-red-500" : "border-neutral-300 hover:border-neutral-400",
                         ].join(" ")}
                         style={{ colorScheme: "light" }}
                       >
@@ -646,10 +566,7 @@ export default function SalesDashboard() {
 
               <div className="flex items-center justify-between gap-3">
                 <p className="text-gray-900 font-semibold">
-                  Total:{" "}
-                  <span className="text-[#dc2626] font-extrabold text-lg">
-                    $ {fmt(grandTotal)}
-                  </span>
+                  Total: <span className="text-[#dc2626] font-extrabold text-lg">$ {fmt(totalAmount)}</span>
                 </p>
                 <PosButton
                   variant="confirm"

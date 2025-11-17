@@ -1,3 +1,4 @@
+// src/context/AppState.tsx
 import React, {
   createContext,
   useCallback,
@@ -5,7 +6,7 @@ import React, {
   useMemo,
   useRef,
   useState,
-  useContext
+  useContext,
 } from "react";
 import { supabase } from "../supabaseClient";
 
@@ -47,12 +48,11 @@ export type UIItem = (DrinkProduct | BeanProduct) & {
   grams?: number | null;
 };
 
-// ====== 預設結構 ======
 const DEFAULT_INV: Inventory = {
   store: {
     drinks: { espresso: [], singleOrigin: [] },
-    HandDrip: []
-  }
+    HandDrip: [],
+  },
 };
 
 type CartItem = UIItem & { qty: number; deductKg?: number };
@@ -105,9 +105,7 @@ export const useAppState = () => {
 
 // ====== 小工具 ======
 const newId = () =>
-  crypto?.randomUUID
-    ? crypto.randomUUID()
-    : `${Date.now()}-${Math.random()}`;
+  crypto?.randomUUID ? crypto.randomUUID() : `${Date.now()}-${Math.random()}`;
 
 function deepClone<T>(v: T): T {
   return typeof structuredClone === "function"
@@ -132,7 +130,7 @@ function dedupeInventory(inv: Inventory): Inventory {
 
   // Drinks
   (["espresso", "singleOrigin"] as DrinkSubKey[]).forEach((k) => {
-    const list = Array.isArray(next.store.drinks[k]) ? next.store.drinks[k] : [];
+    const list = next.store.drinks[k] || [];
     const arr: DrinkProduct[] = [];
     for (const it of list) {
       const key = keyOf("drinks", k, it);
@@ -150,9 +148,8 @@ function dedupeInventory(inv: Inventory): Inventory {
   });
 
   // Beans
-  const beansSrc = Array.isArray(next.store.HandDrip) ? next.store.HandDrip : [];
   const beans: BeanProduct[] = [];
-  for (const it of beansSrc) {
+  for (const it of next.store.HandDrip || []) {
     const key = keyOf("HandDrip", null, it);
     const kept = pick.get(key);
     if (!kept) pick.set(key, it);
@@ -168,7 +165,7 @@ function dedupeInventory(inv: Inventory): Inventory {
   return next;
 }
 
-// 將 DB 撈回來的任意 shape 規格化成 Inventory
+// 將 DB 撈回來的任意 shape 規格化成 Inventory（避免 undefined 造成 UI 異常）
 function normalizeInventory(raw: any): Inventory {
   if (!raw || typeof raw !== "object") return deepClone(DEFAULT_INV);
 
@@ -183,17 +180,11 @@ function normalizeInventory(raw: any): Inventory {
     return {
       store: {
         drinks: {
-          espresso: Array.isArray(drinks.espresso)
-            ? drinks.espresso
-            : [],
-          singleOrigin: Array.isArray(drinks.singleOrigin)
-            ? drinks.singleOrigin
-            : []
+          espresso: Array.isArray(drinks.espresso) ? drinks.espresso : [],
+          singleOrigin: Array.isArray(drinks.singleOrigin) ? drinks.singleOrigin : [],
         },
-        HandDrip: Array.isArray(raw.store.HandDrip)
-          ? raw.store.HandDrip
-          : []
-      }
+        HandDrip: Array.isArray(raw.store.HandDrip) ? raw.store.HandDrip : [],
+      },
     };
   }
 
@@ -202,17 +193,11 @@ function normalizeInventory(raw: any): Inventory {
   return {
     store: {
       drinks: {
-        espresso: Array.isArray(drinks.espresso)
-          ? drinks.espresso
-          : [],
-        singleOrigin: Array.isArray(drinks.singleOrigin)
-          ? drinks.singleOrigin
-          : []
+        espresso: Array.isArray(drinks.espresso) ? drinks.espresso : [],
+        singleOrigin: Array.isArray(drinks.singleOrigin) ? drinks.singleOrigin : [],
       },
-      HandDrip: Array.isArray((raw as any).HandDrip)
-        ? (raw as any).HandDrip
-        : []
-    }
+      HandDrip: Array.isArray((raw as any).HandDrip) ? (raw as any).HandDrip : [],
+    },
   };
 }
 
@@ -227,8 +212,7 @@ async function getOrgIdForCurrentUser(): Promise<string> {
     .limit(1)
     .maybeSingle();
   if (error) throw error;
-  if (!data?.org_id)
-    throw new Error("No organization bound to this user");
+  if (!data?.org_id) throw new Error("No organization bound to this user");
   return data.org_id as string;
 }
 
@@ -244,58 +228,32 @@ async function readAppState<T>(
     .eq("key", key)
     .maybeSingle();
 
-  // PGRST116 = Row not found → 視為空
+  // 404 not found → 視為空
   if (error && (error as any).code !== "PGRST116") throw error;
 
   if (!data) {
-    // ⬇ 首次建立用 insert（避免 upsert 觸發 on_conflict）
-    const { error: insErr } = await supabase
+    // 首次建立
+    const { error: upErr } = await supabase
       .from("app_state")
-      .insert([{ org_id: orgId, key, state: fallback }]);
-    if (insErr) throw insErr;
+      .upsert([{ org_id: orgId, key, state: fallback }]);
+    if (upErr) throw upErr;
     return { value: fallback, updated_at: null };
   }
 
   return {
     value: ((data as any).state as T) ?? fallback,
-    updated_at: (data as any).updated_at ?? null
+    updated_at: (data as any).updated_at ?? null,
   };
 }
 
-
-// 取代 upsert：select → 有就 update，沒有就 insert（不會帶 on_conflict）
 async function writeAppState<T>(orgId: string, key: string, value: T) {
-  // 先查
-  const { data: exists, error: selErr } = await supabase
+  const { error } = await supabase
     .from("app_state")
-    .select("org_id,key")
-    .eq("org_id", orgId)
-    .eq("key", key)
-    .maybeSingle();
-
-  if (selErr && (selErr as any).code !== "PGRST116") throw selErr;
-
-  if (exists) {
-    const { error: updErr } = await supabase
-      .from("app_state")
-      .update({ state: value })
-      .eq("org_id", orgId)
-      .eq("key", key);
-    if (updErr) throw updErr;
-  } else {
-    const { error: insErr } = await supabase
-      .from("app_state")
-      .insert([{ org_id: orgId, key, state: value }]);
-    if (insErr) throw insErr;
-  }
+    .upsert([{ org_id: orgId, key, state: value }]);
+  if (error) throw error;
 }
 
-
-export function AppStateProvider({
-  children
-}: {
-  children: React.ReactNode;
-}) {
+export function AppStateProvider({ children }: { children: React.ReactNode }) {
   const [ready, setReady] = useState(false);
   const [orgId, setOrgId] = useState<string | null>(null);
   const [inventory, _setInventory] = useState<Inventory>(DEFAULT_INV);
@@ -311,11 +269,7 @@ export function AppStateProvider({
       if (!alive) return;
       setOrgId(org);
 
-      const inv = await readAppState<Inventory>(
-        org,
-        POS_INV_KEY,
-        DEFAULT_INV
-      );
+      const inv = await readAppState<Inventory>(org, POS_INV_KEY, DEFAULT_INV);
       const ord = await readAppState<Order[]>(org, POS_ORD_KEY, []);
       if (!alive) return;
 
@@ -324,7 +278,7 @@ export function AppStateProvider({
       invVer.current = inv.updated_at;
       ordVer.current = ord.updated_at;
       _setInventory(dedupeInventory(normalizedInv));
-      setOrders(Array.isArray(ord.value) ? ord.value : []);
+      setOrders(ord.value);
       setReady(true);
 
       // Realtime（選配）
@@ -336,19 +290,17 @@ export function AppStateProvider({
             event: "*",
             schema: "public",
             table: "app_state",
-            filter: `org_id=eq.${org}`
+            filter: `org_id=eq.${org}`,
           },
           (payload) => {
             const row = payload.new as any;
             if (!row) return;
             if (row.key === POS_INV_KEY) {
               invVer.current = row.updated_at;
-              _setInventory(
-                dedupeInventory(normalizeInventory(row.state))
-              );
+              _setInventory(dedupeInventory(normalizeInventory(row.state)));
             } else if (row.key === POS_ORD_KEY) {
               ordVer.current = row.updated_at;
-              setOrders(Array.isArray(row.state) ? row.state : []);
+              setOrders(row.state as Order[]);
             }
           }
         )
@@ -367,14 +319,10 @@ export function AppStateProvider({
   }, []);
 
   const setInventory = useCallback(
-    async (
-      updater: Inventory | ((prev: Inventory) => Inventory)
-    ) => {
+    async (updater: Inventory | ((prev: Inventory) => Inventory)) => {
       const next = dedupeInventory(
         typeof updater === "function"
-          ? (updater as (prev: Inventory) => Inventory)(
-              inventory
-            )
+          ? (updater as (prev: Inventory) => Inventory)(inventory)
           : updater
       );
       _setInventory(next);
@@ -392,70 +340,51 @@ export function AppStateProvider({
       if (!orgId) return null;
       if (!Array.isArray(cart) || cart.length === 0) return null;
 
-      // 先檢查庫存
+      // 計算扣庫存（飲品使用 usagePerCup；豆子用 grams/1000）
       const calcDeductKg = (it: CartItem) => {
         if (typeof it.deductKg !== "undefined")
           return Math.max(0, Number(it.deductKg) || 0);
         if (it.category === "drinks") {
           return Math.max(
             0,
-            (Number((it as any).usagePerCup) || 0.02) *
-              (Number(it.qty) || 0)
+            (Number((it as any).usagePerCup) || 0.02) * (Number(it.qty) || 0)
           );
         }
         const grams = Number(it.grams) || 0;
-        return Math.max(
-          0,
-          (grams * (Number(it.qty) || 0)) / 1000
-        );
+        return Math.max(0, (grams * (Number(it.qty) || 0)) / 1000);
       };
 
       const nextInv = deepClone(inventory);
       for (const it of cart) {
         const d = calcDeductKg(it);
         const mutate = (arr: any[]) =>
-          arr.map((p) =>
+          arr.map((p: any) =>
             p.id === it.id
-              ? {
-                  ...p,
-                  stock: Math.max(
-                    0,
-                    (Number(p.stock) || 0) - d
-                  )
-                }
+              ? { ...p, stock: Math.max(0, (Number(p.stock) || 0) - d) }
               : p
           );
         if (it.category === "drinks") {
           const key = it.subKey as DrinkSubKey;
-          nextInv.store.drinks[key] = mutate(
-            Array.isArray(nextInv.store.drinks[key]) ? nextInv.store.drinks[key] : []
-          );
+          nextInv.store.drinks[key] = mutate(nextInv.store.drinks[key] || []);
         } else {
-          nextInv.store.HandDrip = mutate(
-            Array.isArray(nextInv.store.HandDrip) ? nextInv.store.HandDrip : []
-          );
+          nextInv.store.HandDrip = mutate(nextInv.store.HandDrip || []);
         }
       }
 
-      const items = cart.map(
-        ({ id, name, qty, price, grams, category, subKey }) => ({
-          id,
-          name,
-          qty,
-          price,
-          grams: grams ?? null,
-          category,
-          subKey: subKey ?? null
-        })
-      );
+      const items = cart.map(({ id, name, qty, price, grams, category, subKey }) => ({
+        id,
+        name,
+        qty,
+        price,
+        grams: grams ?? null,
+        category,
+        subKey: subKey ?? null,
+      }));
       const total =
         typeof totalFromUI === "number"
           ? totalFromUI
           : items.reduce(
-              (s, x) =>
-                s +
-                (Number(x.price) || 0) *
-                  (Number(x.qty) || 0),
+              (s, x) => s + (Number(x.price) || 0) * (Number(x.qty) || 0),
               0
             );
 
@@ -465,14 +394,19 @@ export function AppStateProvider({
         items,
         total,
         paymentMethod: extra?.paymentMethod,
-        voided: false
+        voided: false,
       };
 
       const nextOrders = [order, ...orders];
 
-      // 不使用 upsert，避免 on_conflict
-      await writeAppState(orgId, POS_INV_KEY, nextInv);
-      await writeAppState(orgId, POS_ORD_KEY, nextOrders);
+      // 一次 upsert 兩筆 app_state（不帶 on_conflict 參數）
+      const { error } = await supabase
+        .from("app_state")
+        .upsert([
+          { org_id: orgId, key: POS_INV_KEY, state: nextInv },
+          { org_id: orgId, key: POS_ORD_KEY, state: nextOrders },
+        ]);
+      if (error) throw error;
 
       _setInventory(nextInv);
       setOrders(nextOrders);
@@ -495,7 +429,7 @@ export function AppStateProvider({
               ...o,
               voided: true,
               voidedAt: now,
-              voidReason: opt?.reason ?? ""
+              voidReason: opt?.reason ?? "",
             }
           : o
       );
@@ -508,33 +442,28 @@ export function AppStateProvider({
               it.category === "drinks"
                 ? ((it as any).usagePerCup || 0.02)
                 : (Number(it.grams) || 0) / 1000;
-            const d =
-              perUnit * (Number((it as any).qty) || 0);
+            const d = perUnit * (Number((it as any).qty) || 0);
             const mapOne = (p: any) =>
               p.id === it.id
-                ? {
-                    ...p,
-                    stock:
-                      (Number(p.stock) || 0) + d
-                  }
+                ? { ...p, stock: (Number(p.stock) || 0) + d }
                 : p;
             if (it.category === "drinks") {
               const key = it.subKey as DrinkSubKey;
-              nextInv.store.drinks[key] = (
-                Array.isArray(nextInv.store.drinks[key]) ? nextInv.store.drinks[key] : []
-              ).map(mapOne);
+              nextInv.store.drinks[key] = (nextInv.store.drinks[key] || []).map(mapOne);
             } else {
-              nextInv.store.HandDrip = (
-                Array.isArray(nextInv.store.HandDrip) ? nextInv.store.HandDrip : []
-              ).map(mapOne);
+              nextInv.store.HandDrip = (nextInv.store.HandDrip || []).map(mapOne);
             }
           }
         }
       }
 
-      // 不使用 upsert，避免 on_conflict
-      await writeAppState(orgId, POS_INV_KEY, nextInv);
-      await writeAppState(orgId, POS_ORD_KEY, nextOrders);
+      const { error } = await supabase
+        .from("app_state")
+        .upsert([
+          { org_id: orgId, key: POS_INV_KEY, state: nextInv },
+          { org_id: orgId, key: POS_ORD_KEY, state: nextOrders },
+        ]);
+      if (error) throw error;
 
       _setInventory(nextInv);
       setOrders(nextOrders);
@@ -558,23 +487,12 @@ export function AppStateProvider({
       setInventory,
       createOrder,
       voidOrder,
-      repairInventory
+      repairInventory,
     }),
-    [
-      ready,
-      orgId,
-      inventory,
-      orders,
-      setInventory,
-      createOrder,
-      voidOrder,
-      repairInventory
-    ]
+    [ready, orgId, inventory, orders, setInventory, createOrder, voidOrder, repairInventory]
   );
 
-  return (
-    <AppStateContext.Provider value={value}>
-      {children}
-    </AppStateContext.Provider>
-  );
+  return <AppStateContext.Provider value={value}>{children}</AppStateContext.Provider>;
 }
+
+export default AppStateProvider;
