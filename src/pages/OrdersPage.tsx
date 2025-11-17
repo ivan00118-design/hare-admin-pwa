@@ -35,7 +35,11 @@ export default function OrdersPage() {
                       {o.items.map((it, i) => (
                         <li key={i}>
                           {it.name}
-                          {it.category === "drinks" && it.subKey ? ` (${it.subKey === "espresso" ? "Espresso" : "Single Origin"})` : it.grams ? ` (${it.grams}g)` : ""} × {it.qty} @ {fmtMoney(it.price)}
+                          {it.category === "drinks" && it.subKey
+                            ? ` (${it.subKey === "espresso" ? "Espresso" : "Single Origin"})`
+                            : it.grams
+                            ? ` (${it.grams}g)`
+                            : ""} × {it.qty} @ {fmtMoney(it.price)}
                         </li>
                       ))}
                     </ul>
