@@ -23,6 +23,7 @@ export default function Dashboard() {
   const { orders = [] } = useAppState();
   const [picked, setPicked] = useState(todayKey());
 
+  // 僅統計有效訂單
   const validOrders = useMemo(() => orders.filter((o) => !o.voided), [orders]);
   const ordersOfDay = useMemo(() => validOrders.filter((o) => dateKey(o.createdAt) === picked), [validOrders, picked]);
 
@@ -30,15 +31,28 @@ export default function Dashboard() {
   const dayCount = ordersOfDay.length;
   const dayAOV = dayCount ? dayRevenue / dayCount : 0;
 
-  const paymentTotals = useMemo(() => {
-    const map = new Map<string, number>();
+  // 付款彙總（當天）
+  const paymentStats = useMemo(() => {
+    const map = new Map<string, { amount: number; count: number }>();
     for (const o of ordersOfDay) {
-      const k = o.paymentMethod || "—";
-      map.set(k, (map.get(k) || 0) + (Number(o.total) || 0));
+      const k = (o.paymentMethod || "—").trim();
+      const rec = map.get(k) || { amount: 0, count: 0 };
+      rec.amount += Number(o.total) || 0;
+      rec.count += 1;
+      map.set(k, rec);
     }
-    return Array.from(map.entries()).sort((a, b) => b[1] - a[1]);
+    const pairs = Array.from(map.entries())
+      .map(([method, v]) => ({ method, amount: v.amount, count: v.count, aov: v.count ? v.amount / v.count : 0 }))
+      .sort((a, b) => b.amount - a.amount);
+    const totalAmount = pairs.reduce((s, x) => s + x.amount, 0);
+    return {
+      rows: pairs.map((x) => ({ ...x, share: totalAmount ? x.amount / totalAmount : 0 })),
+      totalAmount,
+      totalCount: pairs.reduce((s, x) => s + x.count, 0)
+    };
   }, [ordersOfDay]);
 
+  // 豆子（HandDrip）銷售：保留你原本的彙總，以後若要顯示可直接使用
   const beanStats = useMemo(() => {
     const map = new Map<string, { qty: number; revenue: number; variants: Map<number, number> }>();
     for (const o of ordersOfDay) {
@@ -88,20 +102,10 @@ export default function Dashboard() {
     lines.push(`Avg. Order Value: $ ${fmtMoney(dayAOV)}`);
     lines.push(``);
     lines.push(`Payment Breakdown:`);
-    if (paymentTotals.length === 0) lines.push(`  - (none)`);
-    else for (const [method, amt] of paymentTotals) lines.push(`  - ${method}: $ ${fmtMoney(amt)}`);
-    lines.push(``);
-    lines.push(`Coffee Beans Sold (by type):`);
-    if (beanStats.length === 0) lines.push(`  - (none)`);
-    else {
-      for (const [name, rec] of beanStats) {
-        const variants = Array.from(rec.variants.entries())
-          .sort((a, b) => a[0] - b[0])
-          .map(([g, q]) => (g ? `${g}g × ${q}` : `— × ${q}`))
-          .join(", ");
-        lines.push(`  - ${name}: Qty ${rec.qty} ${variants ? `(${variants}) ` : ""}— $ ${fmtMoney(rec.revenue)}`);
-      }
-    }
+    if (paymentStats.rows.length === 0) lines.push(`  - (none)`);
+    else
+      for (const r of paymentStats.rows)
+        lines.push(`  - ${r.method}: $ ${fmtMoney(r.amount)} • ${Math.round(r.share * 100)}% • ${r.count} orders (AOV ${fmtMoney(r.aov)})`);
     return lines.join("\n");
   };
 
@@ -115,6 +119,7 @@ export default function Dashboard() {
 
   return (
     <div className="p-6 bg-gray-50 min-h-screen" style={{ colorScheme: "light" }}>
+      {/* 頂部工具列 */}
       <div className="flex flex-wrap items-end gap-3 mb-4">
         <h1 className="text-2xl font-extrabold">Dashboard</h1>
         <div className="ml-auto flex items-center gap-2">
@@ -132,8 +137,7 @@ export default function Dashboard() {
         </div>
       </div>
 
-      {/* KPI 與表格（同你舊版 Dashboard 結構） */}
-      {/* ...（略，與你現有版面一致） */}
+      {/* KPI */}
       <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 mb-6">
         <div className="bg-white border border-gray-200 rounded-xl p-4 shadow">
           <div className="text-sm text-gray-500">Daily Revenue</div>
@@ -152,8 +156,69 @@ export default function Dashboard() {
         </div>
       </div>
 
-      {/* 付款彙總 / 豆子銷售 / 最近 4 天表格：排版延續你原本 Dashboard.jsx */}
-      {/* 這裡省略 UI 細節（與舊版一致即可） */}
+      {/* Payment Breakdown */}
+      <div className="bg-white border border-gray-200 rounded-xl p-4 shadow mb-6">
+        <div className="flex items-center gap-3 mb-3">
+          <h2 className="text-lg font-extrabold text-black">Payment Breakdown</h2>
+          <span className="text-xs text-gray-500">({picked})</span>
+          <div className="ml-auto text-sm text-gray-600">
+            <span className="mr-4">Count: <b>{paymentStats.totalCount}</b></span>
+            <span>Total: <b>$ {fmtMoney(paymentStats.totalAmount)}</b></span>
+          </div>
+        </div>
+
+        {paymentStats.rows.length === 0 ? (
+          <p className="text-gray-400">No payments.</p>
+        ) : (
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm text-gray-900">
+              <thead className="bg-black text-white uppercase text-xs font-bold">
+                <tr>
+                  <th className="px-3 py-2 text-left">Method</th>
+                  <th className="px-3 py-2 text-right">Amount</th>
+                  <th className="px-3 py-2 text-center">Orders</th>
+                  <th className="px-3 py-2 text-center">AOV</th>
+                  <th className="px-3 py-2">Share</th>
+                </tr>
+              </thead>
+              <tbody>
+                {paymentStats.rows.map((r) => (
+                  <tr key={r.method} className="border-t border-gray-200 align-middle">
+                    <td className="px-3 py-2 font-semibold">{r.method}</td>
+                    <td className="px-3 py-2 text-right text-[#dc2626] font-extrabold">$ {fmtMoney(r.amount)}</td>
+                    <td className="px-3 py-2 text-center">{r.count}</td>
+                    <td className="px-3 py-2 text-center">$ {fmtMoney(r.aov)}</td>
+                    <td className="px-3 py-2">
+                      <div className="flex items-center gap-2">
+                        <div className="flex-1 h-2 bg-gray-200 rounded">
+                          <div
+                            className="h-2 bg-[#dc2626] rounded"
+                            style={{ width: `${Math.max(2, Math.round(r.share * 100))}%` }}
+                            title={`${Math.round(r.share * 100)}%`}
+                          />
+                        </div>
+                        <div className="w-12 text-right tabular-nums">{Math.round(r.share * 100)}%</div>
+                      </div>
+                    </td>
+                  </tr>
+                ))}
+                <tr className="border-t-2 border-gray-300 font-bold">
+                  <td className="px-3 py-2">Total</td>
+                  <td className="px-3 py-2 text-right text-[#dc2626]">$ {fmtMoney(paymentStats.totalAmount)}</td>
+                  <td className="px-3 py-2 text-center">{paymentStats.totalCount}</td>
+                  <td className="px-3 py-2 text-center">
+                    $ {fmtMoney(paymentStats.totalCount ? paymentStats.totalAmount / paymentStats.totalCount : 0)}
+                  </td>
+                  <td className="px-3 py-2">—</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        )}
+      </div>
+
+      {/* 你可在這裡繼續加：豆子銷售、最近 4 天趨勢等卡片（保留你原有資料計算） */}
+      {/* beanStats / last4 已就緒，如需 UI 我可以再補一張表或小圖表 */}
     </div>
   );
 }
