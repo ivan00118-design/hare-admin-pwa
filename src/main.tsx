@@ -2,16 +2,13 @@
 import React from "react";
 import ReactDOM from "react-dom/client";
 import App from "./App";
-import { InventoryProvider } from "./context/InventoryContext";
-// 若有登入保護：import AuthGate from "./auth/AuthGate"; import Login from "./auth/Login";
+import { AppStateProvider } from "./context/AppState";
+import "./index.css";
 
 ReactDOM.createRoot(document.getElementById("root")!).render(
   <React.StrictMode>
-    <InventoryProvider>
-      {/* 有登入保護時可改成：
-        <AuthGate fallback={<Login />}><App/></AuthGate>
-      */}
+    <AppStateProvider>
       <App />
-    </InventoryProvider>
+    </AppStateProvider>
   </React.StrictMode>
 );

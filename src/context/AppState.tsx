@@ -244,11 +244,11 @@ async function readAppState<T>(
     .eq("key", key)
     .maybeSingle();
 
-  // 404 not found → 視為空
+  // PGRST116 = Row not found → 視為空
   if (error && (error as any).code !== "PGRST116") throw error;
 
   if (!data) {
-    // 首次建立（用 insert，避免 upsert 產生 on_conflict）
+    // ⬇ 首次建立用 insert（避免 upsert 觸發 on_conflict）
     const { error: insErr } = await supabase
       .from("app_state")
       .insert([{ org_id: orgId, key, state: fallback }]);
@@ -262,12 +262,10 @@ async function readAppState<T>(
   };
 }
 
+
 // 取代 upsert：select → 有就 update，沒有就 insert（不會帶 on_conflict）
-async function writeAppState<T>(
-  orgId: string,
-  key: string,
-  value: T
-) {
+async function writeAppState<T>(orgId: string, key: string, value: T) {
+  // 先查
   const { data: exists, error: selErr } = await supabase
     .from("app_state")
     .select("org_id,key")
@@ -291,6 +289,7 @@ async function writeAppState<T>(
     if (insErr) throw insErr;
   }
 }
+
 
 export function AppStateProvider({
   children
