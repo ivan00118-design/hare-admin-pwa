@@ -1,4 +1,6 @@
+// src/pages/SalesDashboard.tsx
 import React, { useMemo, useRef, useState } from "react";
+import { supabase } from "../supabaseClient";
 import { useAppState, type Category, type DrinkSubKey, type UIItem } from "../context/AppState";
 import PosButton from "../components/PosButton.jsx";
 
@@ -25,11 +27,15 @@ type BeanCartItem = UIItem & {
 };
 
 type CartItem = DrinkCartItem | BeanCartItem;
-
 // ------------------------------------------------
 
+const fmt = (n: number) => {
+  const r = Math.round((n + Number.EPSILON) * 100) / 100;
+  return Number.isInteger(r) ? String(r) : r.toFixed(2).replace(/0+$/, "").replace(/\.$/, "");
+};
+
 export default function SalesDashboard() {
-  const { inventory, setInventory, createOrder } = useAppState();
+  const { orgId, inventory, setInventory, createOrder, orders } = useAppState();
 
   const [activeTab, setActiveTab] = useState<Category>("drinks");
   const [drinkSubTab, setDrinkSubTab] = useState<DrinkSubKey>("espresso");
@@ -37,36 +43,36 @@ export default function SalesDashboard() {
   const [editMode, setEditMode] = useState(false);
   const [paymentMethod, setPaymentMethod] = useState("");
 
+  // --- 外送面板狀態 ---
+  const [isDelivery, setIsDelivery] = useState(false);
+  const [deliveryName, setDeliveryName] = useState("");
+  const [deliveryPhone, setDeliveryPhone] = useState("");
+  const [deliveryAddress, setDeliveryAddress] = useState("");
+  const [deliveryFee, setDeliveryFee] = useState<number>(0);
+
   const PAYMENT_OPTIONS = [
     { key: "SimplePay", label: "SimplePay", icon: iconSimplePay },
     { key: "Cash", label: "Cash", icon: iconCash },
     { key: "MacauPass", label: "MacauPass", icon: iconMacauPass }
   ];
 
-  const fmt = (n: number) => {
-    const r = Math.round((n + Number.EPSILON) * 100) / 100;
-    return Number.isInteger(r) ? String(r) : r.toFixed(2).replace(/0+$/, "").replace(/\.$/, "");
-  };
-
-  // ---- 讀取清單（防呆）
   const drinks = inventory?.store?.drinks || { espresso: [], singleOrigin: [] };
   const products =
     activeTab === "drinks" ? (drinks as any)[drinkSubTab] || [] : inventory?.store?.HandDrip || [];
 
-  // ---- 豆子依「同名」分組，並依 grams 排序（全程 Array 安全）
   const beanGroups = useMemo(() => {
     if (activeTab === "drinks") return [] as Array<[string, any[]]>;
     const map = new Map<string, any[]>();
-    for (const it of (Array.isArray(products) ? products : [])) {
-      const key = (it?.name || "").trim();
+    for (const it of products) {
+      const key = (it.name || "").trim();
       if (!map.has(key)) map.set(key, []);
       map.get(key)!.push(it);
     }
     return Array.from(map.entries()).map(([name, variants]) => [
       name,
-      (Array.isArray(variants) ? variants : [])
-        .filter((v: any) => Number.isFinite(Number(v?.grams)))
-        .sort((a: any, b: any) => (Number(a?.grams) || 0) - (Number(b?.grams) || 0))
+      variants
+        .filter((v: any) => Number.isFinite(Number(v.grams)))
+        .sort((a: any, b: any) => (a.grams || 0) - (b.grams || 0))
     ]) as Array<[string, any[]]>;
   }, [activeTab, products]);
 
@@ -150,8 +156,8 @@ export default function SalesDashboard() {
     if (!Number.isFinite(parsed) || parsed <= 0) return;
 
     const isDrink = activeTab === "drinks";
-    const g = isDrink ? 0 : Number(grams ?? item?.grams ?? 0);
-    const usage = isDrink ? Number(item?.usagePerCup ?? 0.02) : 0;
+    const g = isDrink ? 0 : Number(grams ?? item.grams ?? 0);
+    const usage = isDrink ? Number(item.usagePerCup ?? 0.02) : 0;
     const deductKg = isDrink ? parsed * usage : (g * parsed) / 1000;
 
     setCart((prev) => {
@@ -191,6 +197,7 @@ export default function SalesDashboard() {
   };
 
   const totalAmount = cart.reduce((s, i) => s + i.qty * (i.price || 30), 0);
+  const grandTotal = totalAmount + (isDelivery ? Math.max(0, Number(deliveryFee) || 0) : 0);
 
   // --------- 使用可判別聯合的 changeCartQty ----------
   const changeCartQty = (key: string, delta: number) => {
@@ -204,7 +211,7 @@ export default function SalesDashboard() {
 
           const per = p.category === "drinks"
             ? p.usagePerCup        // DrinkCartItem 一定有 usagePerCup
-            : (Number(p.grams) || 0) / 1000; // BeanCartItem 一定有 grams
+            : p.grams / 1000;      // BeanCartItem 一定有 grams
 
           return { ...p, qty: newQty, deductKg: per * newQty };
         })
@@ -212,13 +219,73 @@ export default function SalesDashboard() {
     );
   };
 
+  // ---- 把訂單標記為外送並回寫 app_state.pos_orders ----
+  const markOrderAsDelivery = async (orderId: string) => {
+    if (!orgId) return;
+    const fee = Math.max(0, Number(deliveryFee) || 0);
+    const nextOrders = (Array.isArray(orders) ? orders : []).map((o: any) =>
+      o.id === orderId
+        ? {
+            ...o,
+            channel: "delivery",
+            delivery: {
+              status: "Pending",
+              name: deliveryName.trim(),
+              phone: deliveryPhone.trim(),
+              address: deliveryAddress.trim(),
+              fee
+            }
+          }
+        : o
+    );
+    const { error } = await supabase
+      .from("app_state")
+      .upsert([{ org_id: orgId, key: "pos_orders", state: nextOrders }]); // 不帶 on_conflict
+    if (error) {
+      console.error("[delivery mark upsert] ", error);
+      alert("外送資訊寫入失敗，請稍後再試");
+    }
+  };
+
   const handleCheckout = async () => {
     if (!paymentMethod) return alert("請先選擇支付方式（SimplePay / Cash / MacauPass）");
-    const id = await createOrder(cart, totalAmount, { paymentMethod });
+
+    // 若勾選外送，將外送費作為一個專用品項加進購物車（不改動資料結構）
+    let cartToPay = cart.slice();
+    const fee = Math.max(0, Number(deliveryFee) || 0);
+    if (isDelivery && fee > 0) {
+      const feeItem: BeanCartItem = {
+        id: "delivery-fee",
+        name: "Delivery Fee",
+        price: fee,
+        grams: 0,
+        stock: 0,
+        unit: "kg",
+        category: "HandDrip",
+        subKey: null,
+        qty: 1,
+        deductKg: 0
+      } as any;
+      cartToPay = [...cartToPay, feeItem];
+    }
+
+    const id = await createOrder(cartToPay, grandTotal, { paymentMethod });
     if (!id) return;
-    alert(`✅ Order Completed（付款方式：${paymentMethod}）`);
+
+    if (isDelivery) {
+      await markOrderAsDelivery(id);
+    }
+
+    alert(`✅ 訂單完成${isDelivery ? "（外送）" : ""}（付款方式：${paymentMethod}）`);
     setCart([]);
     setPaymentMethod("");
+    if (isDelivery) {
+      setIsDelivery(false);
+      setDeliveryName("");
+      setDeliveryPhone("");
+      setDeliveryAddress("");
+      setDeliveryFee(0);
+    }
   };
 
   return (
@@ -280,7 +347,7 @@ export default function SalesDashboard() {
                   </thead>
                   <tbody>
                     {activeTab === "drinks"
-                      ? (Array.isArray(products) ? products : []).map((item: any) => (
+                      ? (products || []).map((item: any) => (
                           <tr
                             key={item.id}
                             className="border-t border-gray-200 hover:bg-red-50 cursor-pointer"
@@ -335,7 +402,7 @@ export default function SalesDashboard() {
                     </tr>
                   </thead>
                   <tbody>
-                    {(Array.isArray(products) ? products : []).map((item: any) => (
+                    {(products || []).map((item: any) => (
                       <tr key={item.id} className="border-t border-gray-200">
                         <td className="px-3 py-2 font-semibold truncate" title={item.name}>
                           {item.name}
@@ -455,7 +522,7 @@ export default function SalesDashboard() {
           </div>
         </div>
 
-        {/* 右側訂單摘要 */}
+        {/* 右側訂單摘要 + 外送面板 */}
         <div className="lg:col-span-7 min-w-0">
           <div className="bg-white shadow-xl rounded-xl p-4 border border-gray-200 h-full min-h-[420px] flex flex-col">
             <h2 className="text-xl font-extrabold text-black mb-3">Order Summary</h2>
@@ -500,6 +567,13 @@ export default function SalesDashboard() {
                                 −
                               </PosButton>
                               <span className="inline-block min-w-[2rem] text-center">{item.qty}</span>
+                              <PosButton
+                                variant="black"
+                                className="px-2 py-1 text-xs !text-black hover:!text-black focus:!text-black"
+                                onClick={() => changeCartQty(key, +1)}
+                              >
+                                +
+                              </PosButton>
                             </div>
                           </td>
                           <td className="px-4 py-3 text-center text-[#dc2626] font-extrabold whitespace-nowrap">
@@ -512,6 +586,35 @@ export default function SalesDashboard() {
                 </table>
               </div>
             )}
+
+            {/* 外送結帳小面板 */}
+            <div className="mt-4 rounded-lg border border-gray-200 bg-gray-50 p-3">
+              <label className="inline-flex items-center gap-2">
+                <input type="checkbox" checked={isDelivery} onChange={(e) => setIsDelivery(e.target.checked)} />
+                <span className="font-semibold">外送訂單</span>
+              </label>
+
+              {isDelivery && (
+                <div className="mt-3 grid grid-cols-1 md:grid-cols-2 gap-3">
+                  <div>
+                    <label className="block text-xs font-semibold text-gray-600 mb-1">收件人</label>
+                    <input className="w-full border rounded px-3 h-10" value={deliveryName} onChange={(e) => setDeliveryName(e.target.value)} />
+                  </div>
+                  <div>
+                    <label className="block text-xs font-semibold text-gray-600 mb-1">電話</label>
+                    <input className="w-full border rounded px-3 h-10" value={deliveryPhone} onChange={(e) => setDeliveryPhone(e.target.value)} />
+                  </div>
+                  <div className="md:col-span-2">
+                    <label className="block text-xs font-semibold text-gray-600 mb-1">地址</label>
+                    <textarea className="w-full border rounded px-3 py-2 min-h-[72px]" value={deliveryAddress} onChange={(e) => setDeliveryAddress(e.target.value)} />
+                  </div>
+                  <div>
+                    <label className="block text-xs font-semibold text-gray-600 mb-1">運費</label>
+                    <input type="number" min={0} step="1" className="w-full border rounded px-3 h-10" value={deliveryFee} onChange={(e) => setDeliveryFee(parseFloat(e.target.value) || 0)} />
+                  </div>
+                </div>
+              )}
+            </div>
 
             {/* 付款方式 + 結帳 */}
             <div className="mt-6 border-top pt-4">
@@ -543,11 +646,14 @@ export default function SalesDashboard() {
 
               <div className="flex items-center justify-between gap-3">
                 <p className="text-gray-900 font-semibold">
-                  Total: <span className="text-[#dc2626] font-extrabold text-lg">$ {fmt(totalAmount)}</span>
+                  Total:{" "}
+                  <span className="text-[#dc2626] font-extrabold text-lg">
+                    $ {fmt(grandTotal)}
+                  </span>
                 </p>
                 <PosButton
                   variant="confirm"
-                  className="!bg白 !text-black !border !border-gray-300 shadow-md hover:!bg-gray-100 active:!bg-gray-200 focus:!ring-2 focus:!ring-black"
+                  className="!bg-white !text-black !border !border-gray-300 shadow-md hover:!bg-gray-100 active:!bg-gray-200 focus:!ring-2 focus:!ring-black"
                   style={{ colorScheme: "light" }}
                   onClick={handleCheckout}
                   disabled={cart.length === 0 || !paymentMethod}

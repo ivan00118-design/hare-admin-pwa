@@ -23,113 +23,119 @@ export default function Dashboard() {
   const { orders = [] } = useAppState();
   const [picked, setPicked] = useState(todayKey());
 
-  // 僅統計有效訂單
-  const validOrders = useMemo(() => orders.filter((o) => !o.voided), [orders]);
+  // 僅統計未作廢訂單
+  const validOrders = useMemo(() => orders.filter((o: any) => !o?.voided), [orders]);
   const ordersOfDay = useMemo(
-    () => validOrders.filter((o) => dateKey(o.createdAt) === picked),
+    () => validOrders.filter((o: any) => dateKey(o.createdAt) === picked),
     [validOrders, picked]
   );
 
-  // KPI
-  const dayRevenue = ordersOfDay.reduce((s, o) => s + (Number(o.total) || 0), 0);
-  const dayCount = ordersOfDay.length;
-  const dayAOV = dayCount ? dayRevenue / dayCount : 0;
+  // 判斷是否為外送訂單：presence of `delivery`（與你的 Sales/Delivery 寫回一致）
+  const isDeliveryOrder = (o: any) => !!o?.delivery;
 
-  // -------- Payment Breakdown（當天）--------
-  const paymentStats = useMemo(() => {
-    const map = new Map<string, { amount: number; count: number }>();
-    for (const o of ordersOfDay) {
-      const k = (o.paymentMethod || "—").trim();
-      const rec = map.get(k) || { amount: 0, count: 0 };
-      rec.amount += Number(o.total) || 0;
-      rec.count += 1;
-      map.set(k, rec);
+  // 拆分營收 + 計數
+  const byType = useMemo(() => {
+    let orderRevenue = 0, deliveryRevenue = 0;
+    let orderCount = 0, deliveryCount = 0;
+
+    for (const o of ordersOfDay as any[]) {
+      const amt = Number(o?.total) || 0;
+      if (isDeliveryOrder(o)) {
+        deliveryRevenue += amt;
+        deliveryCount += 1;
+      } else {
+        orderRevenue += amt;
+        orderCount += 1;
+      }
     }
-    const rows = Array.from(map.entries())
-      .map(([method, v]) => ({
-        method,
-        amount: v.amount,
-        count: v.count,
-        aov: v.count ? v.amount / v.count : 0
-      }))
-      .sort((a, b) => b.amount - a.amount);
-
-    const totalAmount = rows.reduce((s, x) => s + x.amount, 0);
-    const totalCount = rows.reduce((s, x) => s + x.count, 0);
-
     return {
-      rows: rows.map((r) => ({ ...r, share: totalAmount ? r.amount / totalAmount : 0 })),
-      totalAmount,
-      totalCount
+      orderRevenue, deliveryRevenue,
+      orderCount, deliveryCount,
+      dayRevenue: orderRevenue + deliveryRevenue,
+      dayCount: orderCount + deliveryCount,
     };
   }, [ordersOfDay]);
 
-  // -------- Coffee Beans Sold (by type)（當天）--------
-  // 以「品名」彙總；同品名的 100g/250g/500g 會聚合統計，variants 顯示各包裝數量
-  const beanStats = useMemo(() => {
-    const map = new Map<string, { qty: number; revenue: number; variants: Map<number, number> }>();
+  // AOV（All / Order / Delivery）
+  const dayAOV = byType.dayCount ? byType.dayRevenue / byType.dayCount : 0;
+  const orderAOV = byType.orderCount ? byType.orderRevenue / byType.orderCount : 0;
+  const deliveryAOV = byType.deliveryCount ? byType.deliveryRevenue / byType.deliveryCount : 0;
 
-    for (const o of ordersOfDay) {
-      const items = Array.isArray(o.items) ? o.items : [];
-      for (const it of items) {
-        if (it?.category !== "HandDrip") continue;
-        const name = (it?.name || "").trim();
-        const qty = Number((it as any).qty) || 0;
-        const price = Number((it as any).price) || 0;
-        const grams = Number((it as any).grams) || 0;
-
-        if (!name || qty <= 0) continue;
-
-        const rec = map.get(name) || { qty: 0, revenue: 0, variants: new Map<number, number>() };
-        rec.qty += qty;
-        rec.revenue += qty * price;
-        rec.variants.set(grams, (rec.variants.get(grams) || 0) + qty);
-        map.set(name, rec);
-      }
+  // Payment Breakdown（當日）
+  const paymentTotals = useMemo(() => {
+    const map = new Map<string, number>();
+    for (const o of ordersOfDay as any[]) {
+      const k = o?.paymentMethod || "—";
+      map.set(k, (map.get(k) || 0) + (Number(o?.total) || 0));
     }
-
-    const rows = Array.from(map.entries())
-      .map(([name, v]) => ({
-        name,
-        qty: v.qty,
-        revenue: v.revenue,
-        variants: Array.from(v.variants.entries())
-          .filter(([g]) => Number.isFinite(g) && g >= 0)
-          .sort((a, b) => a[0] - b[0]) // 依包裝克數小到大
-          .map(([g, q]) => ({ grams: g, qty: q }))
-      }))
-      .sort((a, b) => b.revenue - a.revenue);
-
-    const totalQty = rows.reduce((s, x) => s + x.qty, 0);
-    const totalRevenue = rows.reduce((s, x) => s + x.revenue, 0);
-
-    return { rows, totalQty, totalRevenue };
+    return Array.from(map.entries()).sort((a, b) => b[1] - a[1]);
   }, [ordersOfDay]);
 
-  // 匯總訊息（WhatsApp）
+  // Coffee Beans Sold（by type）
+  const beanStats = useMemo(() => {
+    const map = new Map<string, { qty: number; revenue: number; variants: Map<number, number> }>();
+    for (const o of ordersOfDay as any[]) {
+      for (const it of (o.items || []) as any[]) {
+        if (it.category !== "HandDrip") continue;
+        const name = (it.name || "").trim();
+        if (!map.has(name)) map.set(name, { qty: 0, revenue: 0, variants: new Map() });
+        const rec = map.get(name)!;
+        const q = Number(it.qty) || 0;
+        const price = Number(it.price) || 0;
+        rec.qty += q;
+        rec.revenue += q * price;
+        const g = Number(it.grams) || 0;
+        rec.variants.set(g, (rec.variants.get(g) || 0) + q);
+      }
+    }
+    return Array.from(map.entries()).sort((a, b) => b[1].revenue - a[1].revenue);
+  }, [ordersOfDay]);
+
+  // 最近 4 天（日營收/筆數）
+  const lastNDays = (n = 4) => {
+    const days: string[] = [];
+    const base = new Date(picked);
+    if (Number.isNaN(base.getTime())) return [];
+    for (let i = n - 1; i >= 0; i--) {
+      const d = new Date(base);
+      d.setDate(base.getDate() - i);
+      days.push(dateKey(d));
+    }
+    const group = new Map<string, { revenue: number; count: number }>();
+    for (const o of validOrders as any[]) {
+      const k = dateKey(o.createdAt);
+      if (!days.includes(k)) continue;
+      group.set(k, {
+        revenue: (group.get(k)?.revenue || 0) + (Number(o.total) || 0),
+        count: (group.get(k)?.count || 0) + 1
+      });
+    }
+    return days.map((k) => ({ day: k, revenue: group.get(k)?.revenue || 0, count: group.get(k)?.count || 0 }));
+  };
+  const last4 = useMemo(() => lastNDays(4), [validOrders, picked]);
+
+  // 交班訊息（含 Order/Delivery 的 Count 與 AOV）
   const buildShiftSummary = () => {
     const lines: string[] = [];
     lines.push(`Shift Summary — ${picked}`);
-    lines.push(`Orders: ${dayCount}`);
-    lines.push(`Daily Revenue: $ ${fmtMoney(dayRevenue)}`);
-    lines.push(`Avg. Order Value: $ ${fmtMoney(dayAOV)}`);
+    lines.push(`Orders (All): ${byType.dayCount} · AOV $ ${fmtMoney(dayAOV)}`);
+    lines.push(`Order Only: ${byType.orderCount} · Revenue $ ${fmtMoney(byType.orderRevenue)} · AOV $ ${fmtMoney(orderAOV)}`);
+    lines.push(`Delivery Only: ${byType.deliveryCount} · Revenue $ ${fmtMoney(byType.deliveryRevenue)} · AOV $ ${fmtMoney(deliveryAOV)}`);
+    lines.push(`Total Revenue: $ ${fmtMoney(byType.dayRevenue)}`);
     lines.push(``);
     lines.push(`Payment Breakdown:`);
-    if (paymentStats.rows.length === 0) lines.push(`  - (none)`);
-    else {
-      for (const r of paymentStats.rows) {
-        lines.push(
-          `  - ${r.method}: $ ${fmtMoney(r.amount)} • ${Math.round(r.share * 100)}% • ${r.count} orders (AOV ${fmtMoney(r.aov)})`
-        );
-      }
-    }
+    if (paymentTotals.length === 0) lines.push(`  - (none)`);
+    else for (const [method, amt] of paymentTotals) lines.push(`  - ${method}: $ ${fmtMoney(amt)}`);
     lines.push(``);
     lines.push(`Coffee Beans Sold (by type):`);
-    if (beanStats.rows.length === 0) lines.push(`  - (none)`);
+    if (beanStats.length === 0) lines.push(`  - (none)`);
     else {
-      for (const b of beanStats.rows) {
-        const vStr = b.variants.map((v) => (v.grams ? `${v.grams}g × ${v.qty}` : `— × ${v.qty}`)).join(", ");
-        lines.push(`  - ${b.name}: Qty ${b.qty}${vStr ? ` (${vStr})` : ""} — $ ${fmtMoney(b.revenue)}`);
+      for (const [name, rec] of beanStats) {
+        const variants = Array.from(rec.variants.entries())
+          .sort((a, b) => a[0] - b[0])
+          .map(([g, q]) => (g ? `${g}g × ${q}` : `— × ${q}`))
+          .join(", ");
+        lines.push(`  - ${name}: Qty ${rec.qty} ${variants ? `(${variants}) ` : ""}— $ ${fmtMoney(rec.revenue)}`);
       }
     }
     return lines.join("\n");
@@ -145,12 +151,16 @@ export default function Dashboard() {
 
   return (
     <div className="p-6 bg-gray-50 min-h-screen" style={{ colorScheme: "light" }}>
-      {/* 頂部工具列 */}
       <div className="flex flex-wrap items-end gap-3 mb-4">
         <h1 className="text-2xl font-extrabold">Dashboard</h1>
         <div className="ml-auto flex items-center gap-2">
           <label className="text-sm text-gray-600">Date</label>
-          <input type="date" value={picked} onChange={(e) => setPicked(e.target.value)} className="h-10 border rounded px-3" />
+          <input
+            type="date"
+            value={picked}
+            onChange={(e) => setPicked(e.target.value)}
+            className="h-10 border rounded px-3"
+          />
           <PosButton
             variant="confirm"
             className="!bg-white !text-black !border !border-gray-300 shadow hover:!bg-gray-100 active:!bg-gray-200 focus:!ring-2 focus:!ring-black"
@@ -163,20 +173,29 @@ export default function Dashboard() {
         </div>
       </div>
 
-      {/* KPI */}
-      <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 mb-6">
+      {/* KPI：Order / Delivery 拆分 + 各自 Count/AOV */}
+      <div className="grid grid-cols-1 sm:grid-cols-4 gap-4 mb-6">
         <div className="bg-white border border-gray-200 rounded-xl p-4 shadow">
-          <div className="text-sm text-gray-500">Daily Revenue</div>
-          <div className="mt-1 text-2xl font-extrabold text-[#dc2626]">$ {fmtMoney(dayRevenue)}</div>
-          <div className="mt-1 text-xs text-gray-500">{picked}</div>
+          <div className="text-sm text-gray-500">Order Revenue</div>
+          <div className="mt-1 text-2xl font-extrabold text-[#111]">$ {fmtMoney(byType.orderRevenue)}</div>
+          <div className="mt-1 text-xs text-gray-500">
+            {picked} · {byType.orderCount} orders · AOV $ {fmtMoney(orderAOV)}
+          </div>
         </div>
         <div className="bg-white border border-gray-200 rounded-xl p-4 shadow">
-          <div className="text-sm text-gray-500">Orders</div>
-          <div className="mt-1 text-2xl font-extrabold">{dayCount}</div>
+          <div className="text-sm text-gray-500">Delivery Revenue</div>
+          <div className="mt-1 text-2xl font-extrabold text-[#dc2626]">$ {fmtMoney(byType.deliveryRevenue)}</div>
+          <div className="mt-1 text-xs text-gray-500">
+            {picked} · {byType.deliveryCount} deliveries · AOV $ {fmtMoney(deliveryAOV)}
+          </div>
+        </div>
+        <div className="bg-white border border-gray-200 rounded-xl p-4 shadow">
+          <div className="text-sm text-gray-500">Total Orders</div>
+          <div className="mt-1 text-2xl font-extrabold">{byType.dayCount}</div>
           <div className="mt-1 text-xs text-gray-500">Valid only (excluded voided)</div>
         </div>
         <div className="bg-white border border-gray-200 rounded-xl p-4 shadow">
-          <div className="text-sm text-gray-500">Avg. Order Value</div>
+          <div className="text-sm text-gray-500">Avg. Order Value (All)</div>
           <div className="mt-1 text-2xl font-extrabold">$ {fmtMoney(dayAOV)}</div>
           <div className="mt-1 text-xs text-gray-500">Revenue / Order</div>
         </div>
@@ -184,125 +203,83 @@ export default function Dashboard() {
 
       {/* Payment Breakdown */}
       <div className="bg-white border border-gray-200 rounded-xl p-4 shadow mb-6">
-        <div className="flex items-center gap-3 mb-3">
-          <h2 className="text-lg font-extrabold text-black">Payment Breakdown</h2>
-          <span className="text-xs text-gray-500">({picked})</span>
-          <div className="ml-auto text-sm text-gray-600">
-            <span className="mr-4">Count: <b>{paymentStats.totalCount}</b></span>
-            <span>Total: <b>$ {fmtMoney(paymentStats.totalAmount)}</b></span>
-          </div>
-        </div>
-
-        {paymentStats.rows.length === 0 ? (
-          <p className="text-gray-400">No payments.</p>
+        <h2 className="text-lg font-extrabold mb-3">Payment Breakdown</h2>
+        {paymentTotals.length === 0 ? (
+          <p className="text-gray-500">No payments.</p>
         ) : (
-          <div className="overflow-x-auto">
-            <table className="w-full text-sm text-gray-900">
-              <thead className="bg-black text-white uppercase text-xs font-bold">
-                <tr>
-                  <th className="px-3 py-2 text-left">Method</th>
-                  <th className="px-3 py-2 text-right">Amount</th>
-                  <th className="px-3 py-2 text-center">Orders</th>
-                  <th className="px-3 py-2 text-center">AOV</th>
-                  <th className="px-3 py-2">Share</th>
-                </tr>
-              </thead>
-              <tbody>
-                {paymentStats.rows.map((r) => (
-                  <tr key={r.method} className="border-t border-gray-200 align-middle">
-                    <td className="px-3 py-2 font-semibold">{r.method}</td>
-                    <td className="px-3 py-2 text-right text-[#dc2626] font-extrabold">$ {fmtMoney(r.amount)}</td>
-                    <td className="px-3 py-2 text-center">{r.count}</td>
-                    <td className="px-3 py-2 text-center">$ {fmtMoney(r.aov)}</td>
-                    <td className="px-3 py-2">
-                      <div className="flex items-center gap-2">
-                        <div className="flex-1 h-2 bg-gray-200 rounded">
-                          <div
-                            className="h-2 bg-[#dc2626] rounded"
-                            style={{ width: `${Math.max(2, Math.round(r.share * 100))}%` }}
-                            title={`${Math.round(r.share * 100)}%`}
-                          />
-                        </div>
-                        <div className="w-12 text-right tabular-nums">{Math.round(r.share * 100)}%</div>
-                      </div>
-                    </td>
-                  </tr>
-                ))}
-                <tr className="border-t-2 border-gray-300 font-bold">
-                  <td className="px-3 py-2">Total</td>
-                  <td className="px-3 py-2 text-right text-[#dc2626]">$ {fmtMoney(paymentStats.totalAmount)}</td>
-                  <td className="px-3 py-2 text-center">{paymentStats.totalCount}</td>
-                  <td className="px-3 py-2 text-center">
-                    $ {fmtMoney(paymentStats.totalCount ? paymentStats.totalAmount / paymentStats.totalCount : 0)}
-                  </td>
-                  <td className="px-3 py-2">—</td>
-                </tr>
-              </tbody>
-            </table>
-          </div>
+          <ul className="space-y-2">
+            {paymentTotals.map(([method, amt]) => (
+              <li key={method} className="flex items-center justify-between text-sm">
+                <span>{method}</span>
+                <b>MOP$ {fmtMoney(amt)}</b>
+              </li>
+            ))}
+          </ul>
         )}
       </div>
 
       {/* Coffee Beans Sold (by type) */}
-      <div className="bg-white border border-gray-200 rounded-xl p-4 shadow mb-6">
-        <div className="flex items-center gap-3 mb-3">
-          <h2 className="text-lg font-extrabold text-black">Coffee Beans Sold (by type)</h2>
-          <span className="text-xs text-gray-500">({picked})</span>
-          <div className="ml-auto text-sm text-gray-600">
-            <span className="mr-4">Qty: <b>{beanStats.totalQty}</b></span>
-            <span>Revenue: <b>$ {fmtMoney(beanStats.totalRevenue)}</b></span>
-          </div>
-        </div>
-
-        {beanStats.rows.length === 0 ? (
-          <p className="text-gray-400">No coffee beans sold.</p>
+      <div className="bg-white border border-gray-200 rounded-xl p-4 shadow">
+        <h2 className="text-lg font-extrabold mb-3">Coffee Beans Sold (by type)</h2>
+        {beanStats.length === 0 ? (
+          <p className="text-gray-500">No records.</p>
         ) : (
           <div className="overflow-x-auto">
-            <table className="w-full text-sm text-gray-900">
+            <table className="w-full text-sm">
               <thead className="bg-black text-white uppercase text-xs font-bold">
                 <tr>
                   <th className="px-3 py-2 text-left">Bean</th>
-                  <th className="px-3 py-2 text-center">Qty</th>
                   <th className="px-3 py-2 text-left">Variants</th>
+                  <th className="px-3 py-2 text-right">Qty</th>
                   <th className="px-3 py-2 text-right">Revenue</th>
                 </tr>
               </thead>
               <tbody>
-                {beanStats.rows.map((r) => (
-                  <tr key={r.name} className="border-t border-gray-200 align-middle">
-                    <td className="px-3 py-2 font-semibold">{r.name}</td>
-                    <td className="px-3 py-2 text-center">{r.qty}</td>
-                    <td className="px-3 py-2">
-                      {r.variants.length === 0 ? (
-                        <span className="text-gray-500">—</span>
-                      ) : (
-                        <div className="flex flex-wrap gap-2">
-                          {r.variants.map((v) => (
-                            <span
-                              key={`${r.name}-${v.grams}`}
-                              className="inline-flex items-center px-2 py-0.5 rounded-full bg-gray-100 text-gray-800 border border-gray-200"
-                              title={`${v.grams || 0}g × ${v.qty}`}
-                            >
-                              {v.grams || 0}g × {v.qty}
-                            </span>
-                          ))}
-                        </div>
-                      )}
-                    </td>
-                    <td className="px-3 py-2 text-right text-[#dc2626] font-extrabold">$ {fmtMoney(r.revenue)}</td>
-                  </tr>
-                ))}
-                <tr className="border-t-2 border-gray-300 font-bold">
-                  <td className="px-3 py-2">Total</td>
-                  <td className="px-3 py-2 text-center">{beanStats.totalQty}</td>
-                  <td className="px-3 py-2">—</td>
-                  <td className="px-3 py-2 text-right text-[#dc2626]">$ {fmtMoney(beanStats.totalRevenue)}</td>
-                </tr>
+                {beanStats.map(([name, rec]) => {
+                  const variants = Array.from(rec.variants.entries())
+                    .sort((a, b) => a[0] - b[0])
+                    .map(([g, q]) => (g ? `${g}g × ${q}` : `— × ${q}`))
+                    .join(", ");
+                  return (
+                    <tr key={name} className="border-t">
+                      <td className="px-3 py-2">{name}</td>
+                      <td className="px-3 py-2 text-gray-600">{variants || "—"}</td>
+                      <td className="px-3 py-2 text-right">{rec.qty}</td>
+                      <td className="px-3 py-2 text-right font-bold text-[#dc2626]">MOP$ {fmtMoney(rec.revenue)}</td>
+                    </tr>
+                  );
+                })}
               </tbody>
             </table>
           </div>
         )}
       </div>
+
+      {/* 最近 4 天（可依需求保留/調整） */}
+      <div className="mt-6 bg-white border border-gray-200 rounded-xl p-4 shadow">
+        <h2 className="text-lg font-extrabold mb-3">Last 4 days</h2>
+        <div className="overflow-x-auto">
+          <table className="w-full text-sm">
+            <thead className="bg-black text-white uppercase text-xs font-bold">
+              <tr>
+                <th className="px-3 py-2 text-left">Date</th>
+                <th className="px-3 py-2 text-right">Revenue</th>
+                <th className="px-3 py-2 text-right">Orders</th>
+              </tr>
+            </thead>
+            <tbody>
+              {last4.map((d) => (
+                <tr key={d.day} className="border-t">
+                  <td className="px-3 py-2">{d.day}</td>
+                  <td className="px-3 py-2 text-right">MOP$ {fmtMoney(d.revenue)}</td>
+                  <td className="px-3 py-2 text-right">{d.count}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </div>
+
     </div>
   );
 }
