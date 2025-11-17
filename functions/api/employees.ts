@@ -22,8 +22,7 @@ function makeClient(env: Env) {
   return createClient(url, key, { auth: { persistSession: false } });
 }
 
-// 安全寫法：先查 → 有就 update、沒有就 insert（完全不使用 on_conflict）
-// 為避免 TS 與 Schema 泛型衝突，這裡把 supabase 參數標成 any
+// 為避免 TS 泛型造成 never，這裡以 any 消解；邏輯為 select→update/insert（不使用 on_conflict）
 async function ensureEmployee(supabase: any, userId: string, orgId: string, role?: string | null) {
   const { data: exists, error: selErr } = await supabase
     .from("employees")
@@ -32,7 +31,6 @@ async function ensureEmployee(supabase: any, userId: string, orgId: string, role
     .eq("org_id", orgId)
     .maybeSingle();
 
-  // PGRST116 = Row not found（非錯誤）
   if (selErr && (selErr as any).code !== "PGRST116") throw selErr;
 
   const roleVal = role ?? "member";
@@ -40,14 +38,14 @@ async function ensureEmployee(supabase: any, userId: string, orgId: string, role
   if (exists) {
     const { error: updErr } = await supabase
       .from("employees")
-      .update({ role: roleVal } as any) // ← 消解 never
+      .update({ role: roleVal } as any)
       .eq("user_id", userId)
       .eq("org_id", orgId);
     if (updErr) throw updErr;
   } else {
     const { error: insErr } = await supabase
       .from("employees")
-      .insert([{ user_id: userId, org_id: orgId, role: roleVal }] as any); // ← 消解 never
+      .insert([{ user_id: userId, org_id: orgId, role: roleVal }] as any);
     if (insErr) throw insErr;
   }
 }
@@ -65,9 +63,7 @@ export async function onRequestPost({ request, env }: { request: Request; env: E
     const orgId = String(body.org_id || "").trim();
     const role = typeof body.role === "string" ? body.role : undefined;
 
-    if (!userId || !orgId) {
-      return json({ ok: false, error: "Missing 'user_id' or 'org_id'." }, { status: 400 });
-    }
+    if (!userId || !orgId) return json({ ok: false, error: "Missing 'user_id' or 'org_id'." }, { status: 400 });
 
     await ensureEmployee(supabase, userId, orgId, role);
     return json({ ok: true });
@@ -76,7 +72,6 @@ export async function onRequestPost({ request, env }: { request: Request; env: E
   }
 }
 
-// （可選）CORS 預檢
 export async function onRequestOptions() {
   return new Response(null, {
     status: 204,
