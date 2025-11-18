@@ -122,7 +122,7 @@ export default function Delivery() {
     s === "Pending" ? "Preparing" : s === "Preparing" ? "OutForDelivery" : s === "OutForDelivery" ? "Delivered" : "Delivered";
 
   return (
-      <section className="space-y-6"> 
+    <div className="p-6 bg-gray-50 min-h-screen">
       <div className="flex flex-wrap items-end gap-3 mb-4">
         <h1 className="text-2xl font-extrabold">Delivery</h1>
         <div className="ml-auto flex items-center gap-2">
