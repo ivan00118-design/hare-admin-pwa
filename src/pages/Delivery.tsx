@@ -1,5 +1,5 @@
 // src/pages/Delivery.tsx
-import React, { useMemo, useState } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import { supabase } from "../supabaseClient";
 import { useAppState } from "../context/AppState";
 import PosButton from "../components/PosButton.jsx";
@@ -13,8 +13,23 @@ const fmt = (n: number) => {
 
 export default function Delivery() {
   const { orgId, orders = [], createOrder } = useAppState();
+  const [sessionReady, setSessionReady] = useState(false);
+  const [hasSession, setHasSession] = useState(false);
   const [filter, setFilter] = useState<DeliveryStatus | "All">("All");
   const [q, setQ] = useState("");
+  const [savingId, setSavingId] = useState<string | null>(null);
+
+  useEffect(() => {
+    supabase.auth.getSession().then(({ data }) => {
+      setHasSession(!!data.session);
+      setSessionReady(true);
+    });
+  const { data: sub } = supabase.auth.onAuthStateChange((_ev, sess) => {
+    setHasSession(!!sess);
+    setSessionReady(true);
+  });
+  return () => { sub?.subscription?.unsubscribe?.(); };
+}, []);
 
   // 建立外送單（純外送，只有運費或自訂金額）
   const [newName, setNewName] = useState("");
@@ -43,7 +58,8 @@ export default function Delivery() {
   }, [orders, filter, q]);
 
   const updateOrderDelivery = async (orderId: string, patch: Partial<{ status: DeliveryStatus; name: string; phone: string; address: string; fee: number }>) => {
-    if (!orgId) return;
+    if (!orgId) return alert("尚未載入組織/門市資訊");
+    if (!hasSession) return alert("請先登入再更新外送單");
     const nextOrders = (orders as any[]).map((o: any) =>
       o.id === orderId
         ? {
@@ -53,13 +69,22 @@ export default function Delivery() {
           }
         : o
     );
-    const { error } = await supabase.from("app_state").upsert([{ org_id: orgId, key: "pos_orders", state: nextOrders }]);
+    setSavingId(orderId);
+    const { error } = await supabase
+      .from("app_state")
+      .upsert({ org_id: orgId, key: "pos_orders", state: nextOrders }, { onConflict: "org_id,key" })
+      .select("org_id,key");
+    setSavingId(null);
     if (error) alert("更新失敗：" + error.message);
   };
 
   const createDeliveryOnly = async () => {
     if (!newName.trim() || !newAddr.trim()) {
       alert("請輸入收件人與地址");
+      return;
+    }
+    if (!hasSession) {
+      alert("請先登入再建立外送單");
       return;
     }
     const fee = Math.max(0, Number(newFee) || 0);
@@ -184,10 +209,12 @@ export default function Delivery() {
                 <td className="px-4 py-3 text-center">
                   {o.delivery.status !== "Delivered" && o.delivery.status !== "Cancelled" ? (
                     <div className="inline-flex gap-2">
-                      <PosButton variant="tab" onClick={() => updateOrderDelivery(o.id, { status: nextStatus(o.delivery.status) })}>
+                      <PosButton variant="tab" disabled={savingId === o.id}
+                        onClick={() => updateOrderDelivery(o.id, { status: nextStatus(o.delivery.status) })}>
                         Next
                       </PosButton>
-                      <PosButton variant="black" onClick={() => updateOrderDelivery(o.id, { status: "Cancelled" })}>
+                      <PosButton variant="black" disabled={savingId === o.id}
+                        onClick={() => updateOrderDelivery(o.id, { status: "Cancelled" })}>
                         Cancel
                       </PosButton>
                     </div>
