@@ -1,4 +1,3 @@
-// src/pages/SalesDashboard.tsx
 import React, { useMemo, useRef, useState } from "react";
 import {
   useAppState,

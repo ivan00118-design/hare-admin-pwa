@@ -15,7 +15,7 @@ const defaultItems: Item[] = [
 
 const keyToPath: Record<string, string> = {
   dashboard: "/dashboard",
-  orders: "/salesdashboard",
+  orders: "/orders",
   inventory: "/inventory",
   delivery: "/delivery",
   reports: "/reports",
