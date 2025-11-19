@@ -1,4 +1,3 @@
-// src/components/Sidebar.tsx
 import React from "react";
 import { NavLink } from "react-router-dom";
 
@@ -16,7 +15,7 @@ const defaultItems: Item[] = [
 
 const keyToPath: Record<string, string> = {
   dashboard: "/dashboard",
-  orders: "/orders",
+  orders: "/orderspage",
   inventory: "/inventory",
   delivery: "/delivery",
   reports: "/reports",
