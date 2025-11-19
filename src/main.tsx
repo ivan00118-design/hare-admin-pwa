@@ -4,7 +4,7 @@ import { createBrowserRouter, RouterProvider } from "react-router-dom";
 import { AppStateProvider } from "./context/AppState";
 import AppShell from "./layouts/AppShell";
 import AuthGuard from "./components/AuthGuard";
-
+import OrdersPage from "./pages/OrdersPage";
 import SalesDashboard from "./pages/SalesDashboard";
 import Dashboard from "./pages/Dashboard";
 import Delivery from "./pages/Delivery";
@@ -24,6 +24,7 @@ const router = createBrowserRouter([
     children: [
       { index: true, element: <SalesDashboard /> },
       { path: "dashboard", element: <Dashboard /> },
+      { path: "orders", element: <OrdersPage /> },
       { path: "inventory", element: <InventoryManagement /> },
       { path: "history", element: <History /> },
       { path: "delivery", element: <Delivery /> }
