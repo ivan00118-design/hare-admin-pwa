@@ -25,6 +25,7 @@ const router = createBrowserRouter([
       { index: true, element: <SalesDashboard /> },
       { path: "dashboard", element: <Dashboard /> },
       { path: "inventory", element: <InventoryManagement /> },
+      { path: "orders", element: <SalesDashboard /> },
       { path: "history", element: <History /> },
       { path: "delivery", element: <Delivery /> }
     ]
