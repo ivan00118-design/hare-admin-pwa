@@ -2,7 +2,7 @@ import React from "react";
 import { createBrowserRouter } from "react-router-dom";
 import AppShell from "./layouts/AppShell";
 import AuthGuard from "./components/AuthGuard";
-import OrdersPage from "./pages/OrdersPage";
+
 import SalesDashboard from "./pages/SalesDashboard";
 import Dashboard from "./pages/Dashboard";
 import Delivery from "./pages/Delivery";
@@ -21,7 +21,6 @@ export const router = createBrowserRouter([
     children: [
       { index: true, element: <SalesDashboard /> },     // "/"
       { path: "inventory", element: <InventoryManagement /> },
-      { path: "orders", element: <OrdersPage /> },
       { path: "dashboard", element: <Dashboard /> },
       { path: "delivery", element: <Delivery /> },      // "/delivery" ⬅ 這條給 Sidebar 用
       { path: "history", element: <History /> },
