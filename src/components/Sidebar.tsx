@@ -14,14 +14,12 @@ const defaultItems: Item[] = [
   { key: "history",   label: "History",   icon: "🕘" },
 ];
 
-// 👉 key -> path 的對照表（依你的實際路由調整）
-// 如果沒有 /orders 或 /reports 路由，先刪除 defaultItems 裡對應項目，或把下列路徑改到現有頁面。
 const keyToPath: Record<string, string> = {
-  dashboard: "/",
-  inventory: "/inventory",
+  dashboard: "/dashboard",
   orders: "/orders",
-  reports: "/dashboard", // 若你有 /reports，改成 "/reports"
+  inventory: "/inventory",
   delivery: "/delivery",
+  reports: "/reports",
   history: "/history",
 };
 
