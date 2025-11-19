@@ -19,7 +19,7 @@ export const router = createBrowserRouter([
       </AuthGuard>
     ),
     children: [
-      { index: true, element: <SalesDashboard /> },     // "/"
+      { path: "order", element: <SalesDashboard /> },     // "/"
       { path: "inventory", element: <InventoryManagement /> },
       { path: "dashboard", element: <Dashboard /> },
       { path: "delivery", element: <Delivery /> },      // "/delivery" ⬅ 這條給 Sidebar 用
