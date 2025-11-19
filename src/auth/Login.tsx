@@ -1,4 +1,5 @@
 // src/auth/Login.tsx
+import { useNavigate, useLocation } from "react-router-dom";
 import { useState } from "react";
 import { supabase } from "../supabaseClient";
 
@@ -57,7 +58,6 @@ export default function Login() {
           {loading ? "Signing in..." : "Sign in"}
         </button>
         <p style={{fontSize:12, color:"#6b7280", marginTop:8}}>
-          提示：用 <b>hare / hare123</b> 測試
         </p>
       </form>
     </div>
