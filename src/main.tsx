@@ -10,11 +10,8 @@ import Dashboard from "./pages/Dashboard";
 import Delivery from "./pages/Delivery";
 import History from "./pages/History";
 import InventoryManagement from "./pages/InventoryManagement";
-import Login from "./auth/Login"; // 確保這支檔存在
-
+import Login from "./auth/Login";
 import "./index.css";
-
-
 
 const router = createBrowserRouter([
   {
@@ -34,15 +31,6 @@ const router = createBrowserRouter([
   },
   { path: "/login", element: <Login /> }
 ]);
-
-ReactDOM.createRoot(document.getElementById("root")!).render(
-  <React.StrictMode>
-    <AppStateProvider>
-      <RouterProvider router={router} />
-    </AppStateProvider>
-  </React.StrictMode>
-);
-
 
 ReactDOM.createRoot(document.getElementById("root")!).render(
   <React.StrictMode>
