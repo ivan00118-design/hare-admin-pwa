@@ -11,6 +11,10 @@ import iconSimplePay from "../assets/payments/SimplePay.jpg";
 import iconCash from "../assets/payments/Cash.png";
 import iconMacauPass from "../assets/payments/MacauPass.png";
 
+// ⬇️ 新增：改走 Supabase
+import { placeOrder } from "../services/orders";
+import { useNavigate } from "react-router-dom";
+
 // --------- 可判別聯合 CartItem 型別 ---------
 type DrinkCartItem = UIItem & {
   category: "drinks";
@@ -38,13 +42,16 @@ const fmt = (n: number) => {
 };
 
 export default function SalesDashboard() {
-  const { inventory, setInventory, createOrder } = useAppState();
+  // ⬇️ 移除 createOrder，改由 services/orders.ts 的 placeOrder 寫入 DB
+  const { inventory, setInventory } = useAppState();
+  const navigate = useNavigate();
 
   const [activeTab, setActiveTab] = useState<Category>("drinks");
   const [drinkSubTab, setDrinkSubTab] = useState<DrinkSubKey>("espresso");
   const [cart, setCart] = useState<CartItem[]>([]);
   const [editMode, setEditMode] = useState(false);
   const [paymentMethod, setPaymentMethod] = useState("");
+  const [saving, setSaving] = useState(false); // ⬅️ 避免重複送單
 
   const PAYMENT_OPTIONS = [
     { key: "SimplePay", label: "SimplePay", icon: iconSimplePay },
@@ -52,7 +59,7 @@ export default function SalesDashboard() {
     { key: "MacauPass", label: "MacauPass", icon: iconMacauPass },
   ] as const;
 
-  const drinks = inventory?.store?.drinks || { espresso: [], singleOrigin: [] } as any;
+  const drinks = (inventory?.store?.drinks || { espresso: [], singleOrigin: [] }) as any;
   const products: any[] =
     activeTab === "drinks"
       ? ((drinks as any)[drinkSubTab] || [])
@@ -224,13 +231,37 @@ export default function SalesDashboard() {
     );
   };
 
+  // ⬇️ 重寫：按 Confirm -> 直接寫入 Supabase
   const handleCheckout = async () => {
     if (!paymentMethod) return alert("請先選擇支付方式（SimplePay / Cash / MacauPass）");
-    const id = await createOrder(cart, totalAmount, { paymentMethod });
-    if (!id) return;
-    alert(`✅ Order Completed（付款方式：${paymentMethod}）`);
-    setCart([]);
-    setPaymentMethod("");
+    if (cart.length === 0) return;
+
+    // 轉成 RPC 需要的 payload（name/sku/qty/price）
+    const payload = cart.map((it) => ({
+      name: it.name,
+      // sku 可放入你想識別的維度（例如 drinks 的子類別或豆子的克數）
+      sku:
+        it.category === "drinks"
+          ? `${it.id}-${(it as DrinkCartItem).subKey}`
+          : `${it.id}-${(it as BeanCartItem).grams}g`,
+      qty: it.qty,
+      price: it.price || 30,
+    }));
+
+    setSaving(true);
+    try {
+      const id = await placeOrder(payload, paymentMethod, "ACTIVE"); // ⬅️ 呼叫 Supabase RPC
+      alert(`✅ Order Completed（#${id}，付款：${paymentMethod}）`);
+      setCart([]);
+      setPaymentMethod("");
+      // 可選：跳到歷史頁
+      // navigate("/history");
+    } catch (e: any) {
+      console.error(e);
+      alert(e?.message ?? "Create order failed");
+    } finally {
+      setSaving(false);
+    }
   };
 
   return (
@@ -572,7 +603,7 @@ export default function SalesDashboard() {
                   className="!bg-white !text-black !border !border-gray-300 shadow-md hover:!bg-gray-100 active:!bg-gray-200 focus:!ring-2 focus:!ring-black"
                   style={{ colorScheme: "light" }}
                   onClick={handleCheckout}
-                  disabled={cart.length === 0 || !paymentMethod}
+                  disabled={cart.length === 0 || !paymentMethod || saving}  // ⬅️ 加入 saving
                   title={paymentMethod ? `Pay by ${paymentMethod}` : "Please choose payment first"}
                 >
                   ✅ Confirm Order

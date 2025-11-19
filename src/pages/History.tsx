@@ -1,6 +1,6 @@
-import React, { useMemo, useState } from "react";
-import { useAppState } from "../context/AppState";
+import React, { useEffect, useMemo, useState } from "react";
 import PosButton from "../components/PosButton.jsx";
+import { fetchOrders, voidOrderDB, restockByOrder } from "../services/orders";
 
 const fmtMoney = (n: number) => {
   const v = Number(n) || 0;
@@ -19,34 +19,58 @@ const fmtTime = (iso?: string | null) => {
 };
 
 export default function History() {
-  const { orders = [], voidOrder } = useAppState();
+  // 🔁 改成從 DB 來的資料
+  const [rows, setRows] = useState<any[]>([]);
+  const [count, setCount] = useState(0);
+  const [totalAmount, setTotalAmount] = useState(0);
+  const [loading, setLoading] = useState(false);
+
+  // 篩選 UI（沿用你的欄位）
   const [fromDate, setFromDate] = useState("");
   const [toDate, setToDate] = useState("");
   const [status, setStatus] = useState<"all" | "active" | "voided">("all");
   const [expandedId, setExpandedId] = useState<string | null>(null);
 
-  const filtered = useMemo(() => {
-    const fromTs = fromDate ? new Date(fromDate + "T00:00:00").getTime() : -Infinity;
-    const toTs = toDate ? new Date(toDate + "T23:59:59.999").getTime() : Infinity;
+  const totalGross = useMemo(
+    () => totalAmount, // 從 DB 彙總，不再用前端 reduce
+    [totalAmount]
+  );
 
-    return [...orders]
-      .filter((o) => {
-        const t = new Date(o.createdAt).getTime();
-        if (isNaN(t)) return false;
-        if (t < fromTs || t > toTs) return false;
-        if (status === "active" && o.voided) return false;
-        if (status === "voided" && !o.voided) return false;
-        return true;
-      })
-      .sort((a, b) => (b.createdAt || "").localeCompare(a.createdAt || ""));
-  }, [orders, fromDate, toDate, status]);
+  async function load() {
+    setLoading(true);
+    try {
+      const res = await fetchOrders({
+        from: fromDate ? new Date(fromDate) : null,
+        to: toDate ? new Date(toDate) : null,
+        status,
+        page: 0,
+        pageSize: 200, // 依需求調整
+      });
+      setRows(res.rows);
+      setCount(res.count);
+      setTotalAmount(res.totalAmount);
+    } finally {
+      setLoading(false);
+    }
+  }
 
-  const totalGross = filtered.reduce((s, o) => s + (Number(o.total) || 0), 0);
+  useEffect(() => {
+    load();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [fromDate, toDate, status]);
 
   const askVoid = async (order: any) => {
     const reason = window.prompt("作廢原因（可留空）：", "") || "";
     const restock = window.confirm("是否回補庫存？\n按「確定」= 回補；按「取消」= 不回補");
-    await voidOrder(order.id, { restock, reason });
+    try {
+      await voidOrderDB(order.id, { reason });
+      if (restock) {
+        await restockByOrder(order.id); // 你若尚未實作，這行可先註解
+      }
+      await load(); // 重新載入
+    } catch (e: any) {
+      alert(e.message ?? "Void failed");
+    }
   };
 
   return (
@@ -76,7 +100,7 @@ export default function History() {
           </PosButton>
 
           <div className="ml-auto text-sm text-gray-600">
-            <span className="mr-4">Count: <b>{filtered.length}</b></span>
+            <span className="mr-4">Count: <b>{count}</b></span>
             <span>Total: <b>MOP$ {fmtMoney(totalGross)}</b></span>
           </div>
         </div>
@@ -95,9 +119,9 @@ export default function History() {
             </tr>
           </thead>
           <tbody>
-            {filtered.length === 0 ? (
+            {!loading && rows.length === 0 ? (
               <tr><td colSpan={6} className="px-4 py-6 text-center text-gray-400">No records.</td></tr>
-            ) : filtered.map((o) => {
+            ) : rows.map((o) => {
               const isOpen = expandedId === o.id;
               const shortId = (o.id || "").slice(-6);
               return (
@@ -125,7 +149,7 @@ export default function History() {
                       {isOpen && Array.isArray(o.items) && (
                         <div className="mt-2 rounded border border-gray-200 bg-gray-50 p-2">
                           <ul className="list-disc pl-4">
-                            {o.items.map((it, idx) => (
+                            {o.items.map((it: any, idx: number) => (
                               <li key={idx} className="mb-1">
                                 <span className="font-medium">{it.name}</span>
                                 {it.category === "drinks" && it.subKey
