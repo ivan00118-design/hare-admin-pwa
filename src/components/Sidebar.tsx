@@ -2,6 +2,7 @@
 import React, { useState } from "react";
 import { supabase } from "../supabaseClient";
 
+
 type Item = { key: string; label: string; icon: string };
 type Props = {
   items?: Item[];
@@ -14,6 +15,7 @@ const defaultItems: Item[] = [
   { key: "inventory", label: "Inventory", icon: "📦" },
   { key: "orders",    label: "Orders",    icon: "🧾" },
   { key: "reports",   label: "Reports",   icon: "📊" },
+  { key: "delivery",  label: "Delivery", icon:""    },
   { key: "history",   label: "History",   icon: "🕘" },
 ];
 
