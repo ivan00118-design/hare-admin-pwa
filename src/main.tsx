@@ -1,10 +1,7 @@
-// src/main.tsx
-// src/main.tsx
 import React from "react";
 import ReactDOM from "react-dom/client";
 import { createBrowserRouter, RouterProvider } from "react-router-dom";
 import { AppStateProvider } from "./context/AppState";
-
 import AppShell from "./layouts/AppShell";
 import AuthGuard from "./components/AuthGuard";
 
@@ -16,6 +13,8 @@ import InventoryManagement from "./pages/InventoryManagement";
 import Login from "./auth/Login"; // 確保這支檔存在
 
 import "./index.css";
+
+
 
 const router = createBrowserRouter([
   {

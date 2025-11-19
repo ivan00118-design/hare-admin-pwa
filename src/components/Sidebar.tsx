@@ -1,6 +1,7 @@
 // src/components/Sidebar.tsx
 import React, { useState } from "react";
 import { supabase } from "../supabaseClient";
+import { NavLink } from "react-router-dom";
 
 
 type Item = { key: string; label: string; icon: string };
@@ -15,9 +16,18 @@ const defaultItems: Item[] = [
   { key: "inventory", label: "Inventory", icon: "📦" },
   { key: "orders",    label: "Orders",    icon: "🧾" },
   { key: "reports",   label: "Reports",   icon: "📊" },
-  { key: "delivery",  label: "Delivery", icon:""    },
+  { key: "delivery",  label: "Delivery",  icon:"🚚"  },
   { key: "history",   label: "History",   icon: "🕘" },
 ];
+
+const routeByKey: Record<string, string> = {
+  dashboard: "/",
+  inventory: "/inventory",
+  orders: "/orders",
+  reports: "/dashboard", // 或你實際的 reports 路由
+  delivery: "/delivery",
+  history: "/history",
+};
 
 export default function Sidebar({ items = defaultItems, activeKey, onSelect }: Props) {
   const [openMobile, setOpenMobile] = useState(false);

@@ -7,7 +7,6 @@ export default function AppShell() {
     <div className="min-h-screen grid" style={{ gridTemplateColumns: 'var(--sidebar-w, 64px) 1fr' }}>
       <aside className="border-r bg-white">
         <Sidebar />
-        {/* <FallbackSidebar />  // 要用時再打開 */}
       </aside>
       <main className="p-6 bg-gray-50">
         <Outlet />
