@@ -1,40 +1,29 @@
+// src/pages/History.tsx
 import React, { useEffect, useMemo, useState } from "react";
 import PosButton from "../components/PosButton.jsx";
-import { fetchOrders, voidOrderDB, restockByOrder } from "../services/orders";
+import { fetchOrders, voidOrderDB } from "../services/orders"; // ⬅ DB 服務
 
 const fmtMoney = (n: number) => {
   const v = Number(n) || 0;
   const r = Math.round((v + Number.EPSILON) * 100) / 100;
   return Number.isInteger(r) ? String(r) : r.toFixed(2).replace(/0+$/, "").replace(/\.$/, "");
 };
-
 const fmtTime = (iso?: string | null) => {
-  try {
-    if (!iso) return "";
-    const d = new Date(iso);
-    return d.toLocaleString();
-  } catch {
-    return iso || "";
-  }
+  try { if (!iso) return ""; return new Date(iso).toLocaleString(); } catch { return iso || ""; }
 };
 
 export default function History() {
-  // 🔁 改成從 DB 來的資料
-  const [rows, setRows] = useState<any[]>([]);
-  const [count, setCount] = useState(0);
-  const [totalAmount, setTotalAmount] = useState(0);
-  const [loading, setLoading] = useState(false);
-
-  // 篩選 UI（沿用你的欄位）
   const [fromDate, setFromDate] = useState("");
   const [toDate, setToDate] = useState("");
   const [status, setStatus] = useState<"all" | "active" | "voided">("all");
-  const [expandedId, setExpandedId] = useState<string | null>(null);
 
-  const totalGross = useMemo(
-    () => totalAmount, // 從 DB 彙總，不再用前端 reduce
-    [totalAmount]
-  );
+  const [rows, setRows] = useState<any[]>([]);
+  const [count, setCount] = useState(0);
+  const [totalAmount, setTotalAmount] = useState(0);
+  const [expandedId, setExpandedId] = useState<string | null>(null);
+  const [loading, setLoading] = useState(false);
+
+  const totalGross = useMemo(() => totalAmount, [totalAmount]);
 
   async function load() {
     setLoading(true);
@@ -44,34 +33,22 @@ export default function History() {
         to: toDate ? new Date(toDate) : null,
         status,
         page: 0,
-        pageSize: 200, // 依需求調整
+        pageSize: 200,
       });
       setRows(res.rows);
       setCount(res.count);
       setTotalAmount(res.totalAmount);
-    } finally {
-      setLoading(false);
-    }
+    } finally { setLoading(false); }
   }
 
-  useEffect(() => {
-    load();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [fromDate, toDate, status]);
+  useEffect(() => { load(); /* eslint-disable-next-line */ }, [fromDate, toDate, status]);
 
-  const askVoid = async (order: any) => {
+  async function askVoid(order: any) {
     const reason = window.prompt("作廢原因（可留空）：", "") || "";
-    const restock = window.confirm("是否回補庫存？\n按「確定」= 回補；按「取消」= 不回補");
-    try {
-      await voidOrderDB(order.id, { reason });
-      if (restock) {
-        await restockByOrder(order.id); // 你若尚未實作，這行可先註解
-      }
-      await load(); // 重新載入
-    } catch (e: any) {
-      alert(e.message ?? "Void failed");
-    }
-  };
+    if (!order?.id) return;
+    await voidOrderDB(order.id, { reason });
+    await load();
+  }
 
   return (
     <div className="p-6 bg-gray-50 min-h-screen">
@@ -171,13 +148,6 @@ export default function History() {
                       )}
                     </td>
                   </tr>
-                  {o.voided && o.voidReason && (
-                    <tr className="border-t border-gray-100">
-                      <td colSpan={6} className="px-4 py-2 text-xs text-gray-500">
-                        Void reason: {o.voidReason} {o.voidedAt ? `（${fmtTime(o.voidedAt)}）` : ""}
-                      </td>
-                    </tr>
-                  )}
                 </React.Fragment>
               );
             })}
