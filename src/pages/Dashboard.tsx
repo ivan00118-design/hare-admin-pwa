@@ -1,6 +1,7 @@
-import React, { useMemo, useState } from "react";
-import { useAppState } from "../context/AppState";
+// src/pages/Dashboard.tsx
+import React, { useEffect, useMemo, useState } from "react";
 import PosButton from "../components/PosButton.jsx";
+import { fetchOrders } from "../services/orders";
 
 const WHATSAPP_PHONE = import.meta?.env?.VITE_WHATSAPP_PHONE || "85366396803";
 
@@ -9,6 +10,7 @@ const fmtMoney = (n: number) => {
   const r = Math.round((v + Number.EPSILON) * 100) / 100;
   return Number.isInteger(r) ? String(r) : r.toFixed(2).replace(/0+$/, "").replace(/\.$/, "");
 };
+
 const dateKey = (dLike: string | Date) => {
   const d = dLike instanceof Date ? dLike : new Date(dLike);
   if (Number.isNaN(d.getTime())) return "";
@@ -20,18 +22,42 @@ const dateKey = (dLike: string | Date) => {
 const todayKey = () => dateKey(new Date());
 
 export default function Dashboard() {
-  const { orders = [] } = useAppState();
   const [picked, setPicked] = useState(todayKey());
 
-  // 僅統計未作廢訂單
-  const validOrders = useMemo(() => orders.filter((o: any) => !o?.voided), [orders]);
+  // 從 Supabase 載入資料（抓「選取日的前3天 ~ 選取日」且只取未作廢）
+  const [rows, setRows] = useState<any[]>([]);
+  const [loading, setLoading] = useState(false);
+
+  useEffect(() => {
+    const base = new Date(picked);
+    if (Number.isNaN(base.getTime())) return;
+
+    const from = new Date(base);
+    from.setDate(base.getDate() - 3); // 最近 4 天視窗
+
+    const to = new Date(base); // 當天
+
+    setLoading(true);
+    fetchOrders({
+      from,
+      to,
+      status: "active", // 只取未作廢
+      page: 0,
+      pageSize: 1000, // 視需求調整
+    })
+      .then((res) => setRows(res.rows || []))
+      .finally(() => setLoading(false));
+  }, [picked]);
+
+  // 本頁使用的有效訂單（fetchOrders 已過濾 active；這裡保險再排除一次）
+  const validOrders = useMemo(() => rows.filter((o: any) => !o?.voided), [rows]);
   const ordersOfDay = useMemo(
     () => validOrders.filter((o: any) => dateKey(o.createdAt) === picked),
     [validOrders, picked]
   );
 
-  // 判斷是否為外送訂單：presence of `delivery`（與你的 Sales/Delivery 寫回一致）
-  const isDeliveryOrder = (o: any) => !!o?.delivery;
+  // 外送訂單判斷：之後若你在 DB 增加欄位（如 orders.is_delivery 或 delivery json），這裡即會生效
+  const isDeliveryOrder = (o: any) => !!o?.delivery || !!o?.is_delivery;
 
   // 拆分營收 + 計數
   const byType = useMemo(() => {
@@ -91,12 +117,12 @@ export default function Dashboard() {
     return Array.from(map.entries()).sort((a, b) => b[1].revenue - a[1].revenue);
   }, [ordersOfDay]);
 
-  // 最近 4 天（日營收/筆數）
-  const lastNDays = (n = 4) => {
-    const days: string[] = [];
+  // 最近 4 天（日營收/筆數）- 基於 validOrders（已是四天視窗）
+  const last4 = useMemo(() => {
     const base = new Date(picked);
     if (Number.isNaN(base.getTime())) return [];
-    for (let i = n - 1; i >= 0; i--) {
+    const days: string[] = [];
+    for (let i = 3; i >= 0; i--) {
       const d = new Date(base);
       d.setDate(base.getDate() - i);
       days.push(dateKey(d));
@@ -111,8 +137,7 @@ export default function Dashboard() {
       });
     }
     return days.map((k) => ({ day: k, revenue: group.get(k)?.revenue || 0, count: group.get(k)?.count || 0 }));
-  };
-  const last4 = useMemo(() => lastNDays(4), [validOrders, picked]);
+  }, [validOrders, picked]);
 
   // 交班訊息（含 Order/Delivery 的 Count 與 AOV）
   const buildShiftSummary = () => {
@@ -205,7 +230,7 @@ export default function Dashboard() {
       <div className="bg-white border border-gray-200 rounded-xl p-4 shadow mb-6">
         <h2 className="text-lg font-extrabold mb-3">Payment Breakdown</h2>
         {paymentTotals.length === 0 ? (
-          <p className="text-gray-500">No payments.</p>
+          <p className="text-gray-500">{loading ? "Loading..." : "No payments."}</p>
         ) : (
           <ul className="space-y-2">
             {paymentTotals.map(([method, amt]) => (
@@ -222,7 +247,7 @@ export default function Dashboard() {
       <div className="bg-white border border-gray-200 rounded-xl p-4 shadow">
         <h2 className="text-lg font-extrabold mb-3">Coffee Beans Sold (by type)</h2>
         {beanStats.length === 0 ? (
-          <p className="text-gray-500">No records.</p>
+          <p className="text-gray-500">{loading ? "Loading..." : "No records."}</p>
         ) : (
           <div className="overflow-x-auto">
             <table className="w-full text-sm">
@@ -255,7 +280,7 @@ export default function Dashboard() {
         )}
       </div>
 
-      {/* 最近 4 天（可依需求保留/調整） */}
+      {/* 最近 4 天 */}
       <div className="mt-6 bg-white border border-gray-200 rounded-xl p-4 shadow">
         <h2 className="text-lg font-extrabold mb-3">Last 4 days</h2>
         <div className="overflow-x-auto">
