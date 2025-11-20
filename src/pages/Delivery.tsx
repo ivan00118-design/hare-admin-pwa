@@ -1,10 +1,15 @@
-import React, { useMemo, useRef, useState } from "react";
+// src/pages/Delivery.tsx
+import React, { useMemo, useState } from "react";
 import { useAppState, type Category, type DrinkSubKey, type UIItem } from "../context/AppState";
 import PosButton from "../components/PosButton.jsx";
 import { placeDelivery, type PlaceOrderItem, type DeliveryInfo } from "../services/orders";
+
 import iconSimplePay from "../assets/payments/SimplePay.jpg";
 import iconCash from "../assets/payments/Cash.png";
 import iconMacauPass from "../assets/payments/MacauPass.png";
+
+// 常用收件人（按鈕；可自行增刪）
+const RECIPIENT_PRESETS = ["Foodpanda", "UberEats", "Office", "Home"] as const;
 
 type DrinkCartItem = UIItem & {
   category: "drinks";
@@ -35,7 +40,7 @@ export default function Delivery() {
   const [paymentMethod, setPaymentMethod] = useState("");
   const [saving, setSaving] = useState(false);
 
-  // 收件資料
+  // 只保留收件人名稱、備註、預約時間（不再有 phone/address）
   const [delivery, setDelivery] = useState<DeliveryInfo>({
     customer_name: "",
     note: "",
@@ -71,48 +76,48 @@ export default function Delivery() {
     ]) as Array<[string, any[]]>;
   }, [activeTab, products]);
 
+  // 加入購物車（drinks 要補 usagePerCup）
   const addToCart = (item: any, qty: number, grams: number | null = null) => {
-  const parsed = Number(qty);
-  if (!Number.isFinite(parsed) || parsed <= 0) return;
+    const parsed = Number(qty);
+    if (!Number.isFinite(parsed) || parsed <= 0) return;
 
-  const isDrink = activeTab === "drinks";
-  const g = isDrink ? 0 : Number(grams ?? item.grams ?? 0);
-  const usage = isDrink ? Number(item.usagePerCup ?? 0.02) : 0; // ⬅️ 補這行
+    const isDrink = activeTab === "drinks";
+    const g = isDrink ? 0 : Number(grams ?? item.grams ?? 0);
+    const usage = isDrink ? Number(item.usagePerCup ?? 0.02) : 0;
 
-  setCart((prev: CartItem[]) => {
-    const key = `${isDrink ? "drinks" : "HandDrip"}|${isDrink ? drinkSubTab : ""}|${item.id}|${g}`;
-    const existed = prev.find(
-      (p) => `${p.category}|${(p as any).subKey || ""}|${p.id}|${(p as any).grams || 0}` === key
-    );
-    if (existed) {
-      return prev.map((p: CartItem) =>
-        `${p.category}|${(p as any).subKey || ""}|${p.id}|${(p as any).grams || 0}` === key
-          ? { ...p, qty: p.qty + parsed }
-          : p
+    setCart((prev: CartItem[]) => {
+      const key = `${isDrink ? "drinks" : "HandDrip"}|${isDrink ? drinkSubTab : ""}|${item.id}|${g}`;
+      const existed = prev.find(
+        (p) => `${p.category}|${(p as any).subKey || ""}|${p.id}|${(p as any).grams || 0}` === key
       );
-    }
+      if (existed) {
+        return prev.map((p: CartItem) =>
+          `${p.category}|${(p as any).subKey || ""}|${p.id}|${(p as any).grams || 0}` === key
+            ? { ...p, qty: p.qty + parsed }
+            : p
+        );
+      }
 
       const patch: CartItem = isDrink
-      ? {
-          ...(item as UIItem),
-          category: "drinks",
-          subKey: drinkSubTab,
-          grams: null,
-          qty: parsed,
-          // 必填：避免 TS2322
-          usagePerCup: usage,
-        }
-      : {
-          ...(item as UIItem),
-          category: "HandDrip",
-          subKey: null,
-          grams: g,
-          qty: parsed,
-        };
+        ? {
+            ...(item as UIItem),
+            category: "drinks",
+            subKey: drinkSubTab,
+            grams: null,
+            qty: parsed,
+            usagePerCup: usage,
+          }
+        : {
+            ...(item as UIItem),
+            category: "HandDrip",
+            subKey: null,
+            grams: g,
+            qty: parsed,
+          };
 
-    return [...prev, patch];
-  });
-};
+      return [...prev, patch];
+    });
+  };
 
   const changeCartQty = (key: string, delta: number) => {
     setCart((prev: CartItem[]) =>
@@ -134,19 +139,13 @@ export default function Delivery() {
   const handleConfirmDelivery = async () => {
     if (!paymentMethod) return alert("請先選擇支付方式");
     if (cart.length === 0) return alert("請先加入商品");
-    if (!(delivery.address || "").trim()) {
-      const cont = window.confirm("未填寫地址，確定要建立外送單嗎？");
-      if (!cont) return;
-    }
 
-    // 對齊 place_order 需要的 items 形狀
+    // 對齊 RPC 需要的 items 形狀
     const payload: PlaceOrderItem[] = cart.map((it) => {
       const isDrink = it.category === "drinks";
       return {
         name: it.name,
-        sku: isDrink
-          ? `${it.id}-${(it as any).subKey}`
-          : `${it.id}-${(it as any).grams}g`,
+        sku: isDrink ? `${it.id}-${(it as any).subKey}` : `${it.id}-${(it as any).grams}g`,
         qty: it.qty,
         price: it.price || 30,
         category: isDrink ? "drinks" : "HandDrip",
@@ -155,13 +154,20 @@ export default function Delivery() {
       };
     });
 
+    // 只帶名稱 / 備註 / 預約時間（不再帶 phone/address）
+    const info: DeliveryInfo = {
+      customer_name: (delivery.customer_name || "").trim(),
+      note: delivery.note || "",
+      scheduled_at: delivery.scheduled_at || null,
+    };
+
     setSaving(true);
     try {
-      const id = await placeDelivery(payload, paymentMethod, delivery, Number(deliveryFee) || 0, "ACTIVE");
+      const id = await placeDelivery(payload, paymentMethod, info, Number(deliveryFee) || 0, "ACTIVE");
       alert(`✅ Delivery Created（#${id}）`);
       setCart([]);
       setPaymentMethod("");
-      setDelivery({ customer_name: "", phone: "", address: "", note: "", scheduled_at: null });
+      setDelivery({ customer_name: "", note: "", scheduled_at: null });
       setDeliveryFee(0);
     } catch (e: any) {
       console.error(e);
@@ -253,18 +259,65 @@ export default function Delivery() {
         {/* 右側：外送資料 + 結帳 */}
         <div className="lg:col-span-7 min-w-0">
           <div className="bg-white shadow-xl rounded-xl p-4 border border-gray-200 h-full min-h-[420px] flex flex-col gap-4">
-            {/* 收件資訊 */}
+            {/* 收件資訊（按鈕選；無 phone/address） */}
             <div className="rounded-lg border border-gray-200 p-4">
               <h3 className="text-lg font-extrabold mb-3">Recipient</h3>
+
+              {/* 預設按鈕 */}
+              <div className="flex flex-wrap gap-2 mb-3">
+                {RECIPIENT_PRESETS.map((name) => (
+                  <PosButton
+                    key={name}
+                    variant="tab"
+                    selected={(delivery.customer_name || "") === name}
+                    onClick={() => setDelivery((d) => ({ ...d, customer_name: name }))}
+                    title={name}
+                  >
+                    {name}
+                  </PosButton>
+                ))}
+                <PosButton
+                  variant="black"
+                  onClick={() => {
+                    const v = window.prompt("自訂收件人名稱");
+                    if (v && v.trim()) setDelivery((d) => ({ ...d, customer_name: v.trim() }));
+                  }}
+                  title="自訂"
+                >
+                  + Custom
+                </PosButton>
+                <PosButton
+                  variant="tab"
+                  onClick={() => setDelivery((d) => ({ ...d, customer_name: "" }))}
+                  title="清空"
+                >
+                  Clear
+                </PosButton>
+              </div>
+
+              {/* 備註 / 預約時間 / 外送費 */}
               <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-                <input className="h-10 border rounded px-3" placeholder="Name" value={delivery.customer_name ?? ""} onChange={(e) => setDelivery((d) => ({ ...d, customer_name: e.target.value }))} />
-                <input className="h-10 border rounded px-3" placeholder="Phone" value={delivery.phone ?? ""} onChange={(e) => setDelivery((d) => ({ ...d, phone: e.target.value }))} />
-                <input className="h-10 border rounded px-3 md:col-span-2" placeholder="Address" value={delivery.address ?? ""} onChange={(e) => setDelivery((d) => ({ ...d, address: e.target.value }))} />
-                <input className="h-10 border rounded px-3 md:col-span-2" placeholder="Note (optional)" value={delivery.note ?? ""} onChange={(e) => setDelivery((d) => ({ ...d, note: e.target.value }))} />
-                <input className="h-10 border rounded px-3" type="datetime-local" value={delivery.scheduled_at ?? ""} onChange={(e) => setDelivery((d) => ({ ...d, scheduled_at: e.target.value || null }))} />
+                <input
+                  className="h-10 border rounded px-3 md:col-span-2"
+                  placeholder="Note (optional)"
+                  value={delivery.note ?? ""}
+                  onChange={(e) => setDelivery((d) => ({ ...d, note: e.target.value }))}
+                />
+                <input
+                  className="h-10 border rounded px-3"
+                  type="datetime-local"
+                  value={delivery.scheduled_at ?? ""}
+                  onChange={(e) => setDelivery((d) => ({ ...d, scheduled_at: e.target.value || null }))}
+                />
                 <div className="flex items-center gap-2">
                   <label className="text-sm text-gray-600">Delivery Fee</label>
-                  <input className="h-10 border rounded px-3 w-32" type="number" step="1" value={deliveryFee} onChange={(e) => setDeliveryFee(parseInt(e.target.value || "0", 10))} />
+                  <input
+                    className="h-10 border rounded px-3 w-32"
+                    type="number"
+                    step="1"
+                    value={deliveryFee}
+                    onChange={(e) => setDeliveryFee(parseInt(e.target.value || "0", 10))}
+                  />
                 </div>
               </div>
             </div>
@@ -316,9 +369,17 @@ export default function Delivery() {
                   {PAYMENT_OPTIONS.map((opt) => {
                     const selected = paymentMethod === opt.key;
                     return (
-                      <button key={opt.key} type="button" onClick={() => setPaymentMethod(opt.key)}
+                      <button
+                        key={opt.key}
+                        type="button"
+                        onClick={() => setPaymentMethod(opt.key)}
                         aria-pressed={selected}
-                        className={["h-12 w-24 rounded-lg bg-white border flex items-center justify-center", "shadow-sm focus:outline-none focus-visible:ring-2 focus-visible:ring-red-500", selected ? "border-red-500 ring-2 ring-red-500" : "border-neutral-300 hover:border-neutral-400"].join(" ")}>
+                        className={[
+                          "h-12 w-24 rounded-lg bg-white border flex items-center justify-center",
+                          "shadow-sm focus:outline-none focus-visible:ring-2 focus-visible:ring-red-500",
+                          selected ? "border-red-500 ring-2 ring-red-500" : "border-neutral-300 hover:border-neutral-400",
+                        ].join(" ")}
+                      >
                         <img src={opt.icon} alt={opt.label} className="h-6 object-contain pointer-events-none" />
                         <span className="sr-only">{opt.label}</span>
                       </button>
