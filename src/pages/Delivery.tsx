@@ -1,5 +1,5 @@
 // src/pages/Delivery.tsx
-import React, { useMemo, useState } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import { useAppState, type Category, type DrinkSubKey, type UIItem } from "../context/AppState";
 import PosButton from "../components/PosButton.jsx";
 import { placeDelivery, type PlaceOrderItem, type DeliveryInfo } from "../services/orders";
@@ -8,8 +8,9 @@ import iconSimplePay from "../assets/payments/SimplePay.jpg";
 import iconCash from "../assets/payments/Cash.png";
 import iconMacauPass from "../assets/payments/MacauPass.png";
 
-// 常用收件人（按鈕；可自行增刪）
-const RECIPIENT_PRESETS = ["Foodpanda", "UberEats", "Office", "Home"] as const;
+/** 預設收件人＋儲存鍵 */
+const DEFAULT_RECIPIENTS = ["門市客戶", "公司", "家", "VIP A", "VIP B"] as const;
+const LS_RECIPIENTS_KEY = "pos_delivery_recipient_presets_v1";
 
 type DrinkCartItem = UIItem & {
   category: "drinks";
@@ -40,13 +41,61 @@ export default function Delivery() {
   const [paymentMethod, setPaymentMethod] = useState("");
   const [saving, setSaving] = useState(false);
 
-  // 只保留收件人名稱、備註、預約時間（不再有 phone/address）
+  // 收件資料：只保留名稱／備註／時間
   const [delivery, setDelivery] = useState<DeliveryInfo>({
     customer_name: "",
     note: "",
     scheduled_at: null,
   });
   const [deliveryFee, setDeliveryFee] = useState<number>(0);
+
+  // 可編輯的收件人按鈕（localStorage 持久化）
+  const [recipientPresets, setRecipientPresets] = useState<string[]>(() => {
+    try {
+      const raw = localStorage.getItem(LS_RECIPIENTS_KEY);
+      const arr = raw ? JSON.parse(raw) : null;
+      return Array.isArray(arr) ? arr.filter((s: any) => typeof s === "string") : [...DEFAULT_RECIPIENTS];
+    } catch {
+      return [...DEFAULT_RECIPIENTS];
+    }
+  });
+  const [editRecipients, setEditRecipients] = useState(false);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem(LS_RECIPIENTS_KEY, JSON.stringify(recipientPresets));
+    } catch {}
+  }, [recipientPresets]);
+
+  const addPreset = () => {
+    const v = window.prompt("新增收件人名稱");
+    if (!v) return;
+    const name = v.trim();
+    if (!name) return;
+    if (recipientPresets.includes(name)) {
+      alert("名稱已存在");
+      return;
+    }
+    setRecipientPresets((prev) => [...prev, name]);
+  };
+  const renamePreset = (oldName: string) => {
+    const v = window.prompt("重新命名", oldName);
+    if (!v) return;
+    const name = v.trim();
+    if (!name) return;
+    setRecipientPresets((prev) => prev.map((n) => (n === oldName ? name : n)));
+    setDelivery((d) => (d.customer_name === oldName ? { ...d, customer_name: name } : d));
+  };
+  const removePreset = (name: string) => {
+    if (!window.confirm(`刪除「${name}」？`)) return;
+    setRecipientPresets((prev) => prev.filter((n) => n !== name));
+    setDelivery((d) => (d.customer_name === name ? { ...d, customer_name: "" } : d));
+  };
+  const resetPresets = () => {
+    if (!window.confirm("重設為系統預設按鈕？")) return;
+    setRecipientPresets([...DEFAULT_RECIPIENTS]);
+    setDelivery((d) => ({ ...d, customer_name: "" }));
+  };
 
   const PAYMENT_OPTIONS = [
     { key: "SimplePay", label: "SimplePay", icon: iconSimplePay },
@@ -56,9 +105,7 @@ export default function Delivery() {
 
   const drinks = (inventory?.store?.drinks || { espresso: [], singleOrigin: [] }) as any;
   const products: any[] =
-    activeTab === "drinks"
-      ? ((drinks as any)[drinkSubTab] || [])
-      : (inventory?.store?.HandDrip || []);
+    activeTab === "drinks" ? ((drinks as any)[drinkSubTab] || []) : (inventory?.store?.HandDrip || []);
 
   const beanGroups = useMemo(() => {
     if (activeTab === "drinks") return [] as Array<[string, any[]]>;
@@ -76,7 +123,7 @@ export default function Delivery() {
     ]) as Array<[string, any[]]>;
   }, [activeTab, products]);
 
-  // 加入購物車（drinks 要補 usagePerCup）
+  // 加入購物車（drinks 必帶 usagePerCup）
   const addToCart = (item: any, qty: number, grams: number | null = null) => {
     const parsed = Number(qty);
     if (!Number.isFinite(parsed) || parsed <= 0) return;
@@ -139,8 +186,10 @@ export default function Delivery() {
   const handleConfirmDelivery = async () => {
     if (!paymentMethod) return alert("請先選擇支付方式");
     if (cart.length === 0) return alert("請先加入商品");
+    if (!delivery.customer_name || !delivery.customer_name.trim()) {
+      return alert("請先選擇/輸入收件人名稱");
+    }
 
-    // 對齊 RPC 需要的 items 形狀
     const payload: PlaceOrderItem[] = cart.map((it) => {
       const isDrink = it.category === "drinks";
       return {
@@ -154,16 +203,19 @@ export default function Delivery() {
       };
     });
 
-    // 只帶名稱 / 備註 / 預約時間（不再帶 phone/address）
-    const info: DeliveryInfo = {
-      customer_name: (delivery.customer_name || "").trim(),
-      note: delivery.note || "",
-      scheduled_at: delivery.scheduled_at || null,
-    };
-
     setSaving(true);
     try {
-      const id = await placeDelivery(payload, paymentMethod, info, Number(deliveryFee) || 0, "ACTIVE");
+      const id = await placeDelivery(
+        payload,
+        paymentMethod,
+        {
+          customer_name: delivery.customer_name || "",
+          note: delivery.note || "",
+          scheduled_at: delivery.scheduled_at || null,
+        },
+        Number(deliveryFee) || 0,
+        "ACTIVE"
+      );
       alert(`✅ Delivery Created（#${id}）`);
       setCart([]);
       setPaymentMethod("");
@@ -187,14 +239,20 @@ export default function Delivery() {
         <PosButton
           variant="tab"
           selected={activeTab === "drinks" && drinkSubTab === "espresso"}
-          onClick={() => { setActiveTab("drinks"); setDrinkSubTab("espresso"); }}
+          onClick={() => {
+            setActiveTab("drinks");
+            setDrinkSubTab("espresso");
+          }}
         >
           Espresso
         </PosButton>
         <PosButton
           variant="tab"
           selected={activeTab === "drinks" && drinkSubTab === "singleOrigin"}
-          onClick={() => { setActiveTab("drinks"); setDrinkSubTab("singleOrigin"); }}
+          onClick={() => {
+            setActiveTab("drinks");
+            setDrinkSubTab("singleOrigin");
+          }}
         >
           Single Origin
         </PosButton>
@@ -206,7 +264,9 @@ export default function Delivery() {
           <div className="bg-white shadow-xl rounded-xl p-4 border border-gray-200 h-full min-h-[420px] flex flex-col">
             <h2 className="text-xl font-extrabold mb-3">
               {activeTab === "drinks"
-                ? (drinkSubTab === "espresso" ? "Espresso Menu" : "Single Origin Menu")
+                ? drinkSubTab === "espresso"
+                  ? "Espresso Menu"
+                  : "Single Origin Menu"
                 : "Coffee Beans Menu"}
             </h2>
 
@@ -221,7 +281,11 @@ export default function Delivery() {
                 <tbody>
                   {activeTab === "drinks"
                     ? (products as any[]).map((item: any) => (
-                        <tr key={item.id} className="border-t hover:bg-red-50 cursor-pointer" onClick={() => addToCart(item, 1)}>
+                        <tr
+                          key={item.id}
+                          className="border-t hover:bg-red-50 cursor-pointer"
+                          onClick={() => addToCart(item, 1)}
+                        >
                           <td className="px-4 py-3">
                             <div className="font-semibold break-words">{item.name}</div>
                             <div className="text-xs text-gray-500 mt-1">{fmt(item.price)}</div>
@@ -259,47 +323,71 @@ export default function Delivery() {
         {/* 右側：外送資料 + 結帳 */}
         <div className="lg:col-span-7 min-w-0">
           <div className="bg-white shadow-xl rounded-xl p-4 border border-gray-200 h-full min-h-[420px] flex flex-col gap-4">
-            {/* 收件資訊（按鈕選；無 phone/address） */}
+            {/* 收件資訊（可編輯預設按鈕；無 phone/address） */}
             <div className="rounded-lg border border-gray-200 p-4">
-              <h3 className="text-lg font-extrabold mb-3">Recipient</h3>
-
-              {/* 預設按鈕 */}
-              <div className="flex flex-wrap gap-2 mb-3">
-                {RECIPIENT_PRESETS.map((name) => (
-                  <PosButton
-                    key={name}
-                    variant="tab"
-                    selected={(delivery.customer_name || "") === name}
-                    onClick={() => setDelivery((d) => ({ ...d, customer_name: name }))}
-                    title={name}
-                  >
-                    {name}
+              <div className="flex items-center justify-between mb-3">
+                <h3 className="text-lg font-extrabold">Recipient</h3>
+                <div className="flex items-center gap-2">
+                  <PosButton variant="tab" selected={editRecipients} onClick={() => setEditRecipients((v) => !v)}>
+                    {editRecipients ? "Done" : "Edit"}
                   </PosButton>
-                ))}
-                <PosButton
-                  variant="black"
-                  onClick={() => {
-                    const v = window.prompt("自訂收件人名稱");
-                    if (v && v.trim()) setDelivery((d) => ({ ...d, customer_name: v.trim() }));
-                  }}
-                  title="自訂"
-                >
-                  + Custom
-                </PosButton>
-                <PosButton
-                  variant="tab"
-                  onClick={() => setDelivery((d) => ({ ...d, customer_name: "" }))}
-                  title="清空"
-                >
-                  Clear
-                </PosButton>
+                  {editRecipients && (
+                    <>
+                      <PosButton variant="black" onClick={addPreset}>＋ Add</PosButton>
+                      <PosButton variant="tab" onClick={resetPresets}>↺ Reset</PosButton>
+                    </>
+                  )}
+                </div>
+              </div>
+
+              {/* 預設按鈕列 */}
+              <div className="flex flex-wrap gap-2 mb-3">
+                {recipientPresets.map((name) => {
+                  const selected = delivery.customer_name === name;
+                  return (
+                    <div key={name} className="flex items-center gap-1">
+                      <PosButton
+                        variant="tab"
+                        selected={selected}
+                        onClick={() => setDelivery((d) => ({ ...d, customer_name: name }))}
+                        aria-pressed={selected}
+                      >
+                        {name}
+                      </PosButton>
+                      {editRecipients && (
+                        <>
+                          <button
+                            type="button"
+                            className="h-7 px-2 border rounded text-xs text-gray-600 hover:bg-gray-50"
+                            title="Rename"
+                            onClick={() => renamePreset(name)}
+                          >
+                            ✎
+                          </button>
+                          <button
+                            type="button"
+                            className="h-7 px-2 border rounded text-xs text-gray-600 hover:bg-gray-50"
+                            title="Delete"
+                            onClick={() => removePreset(name)}
+                          >
+                            ×
+                          </button>
+                        </>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+
+              <div className="mb-3 text-sm text-gray-600">
+                目前收件人：<b>{delivery.customer_name || "（未選擇）"}</b>
               </div>
 
               {/* 備註 / 預約時間 / 外送費 */}
               <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
                 <input
                   className="h-10 border rounded px-3 md:col-span-2"
-                  placeholder="Note (optional)"
+                  placeholder="備註（可留空）"
                   value={delivery.note ?? ""}
                   onChange={(e) => setDelivery((d) => ({ ...d, note: e.target.value }))}
                 />
@@ -325,7 +413,11 @@ export default function Delivery() {
             {/* 訂單摘要 */}
             <div className="rounded-lg border border-gray-200">
               <table className="w-full table-fixed text-sm text-gray-900">
-                <colgroup><col style={{ width: "60%" }} /><col style={{ width: "20%" }} /><col style={{ width: "20%" }} /></colgroup>
+                <colgroup>
+                  <col style={{ width: "60%" }} />
+                  <col style={{ width: "20%" }} />
+                  <col style={{ width: "20%" }} />
+                </colgroup>
                 <thead className="bg-black text-white uppercase text-xs font-bold">
                   <tr>
                     <th className="px-4 py-3 text-left">Product</th>
@@ -335,28 +427,42 @@ export default function Delivery() {
                 </thead>
                 <tbody>
                   {cart.length === 0 ? (
-                    <tr><td className="px-4 py-6 text-center text-gray-400" colSpan={3}>No items added.</td></tr>
-                  ) : cart.map((item) => {
-                    const key = `${item.category}|${(item as any).subKey || ""}|${item.id}|${(item as any).grams || 0}`;
-                    return (
-                      <tr key={key} className="border-t hover:bg-red-50">
-                        <td className="px-4 py-3 font-semibold">
-                          {item.name}
-                          {item.category === "drinks" && (item as any).subKey
-                            ? ` (${(item as any).subKey === "espresso" ? "Espresso" : "Single Origin"})`
-                            : (item as any).grams ? ` ${(item as any).grams}g` : ""}
-                        </td>
-                        <td className="px-4 py-3 text-center">
-                          <div className="inline-flex items-center gap-2 justify-center">
-                            <PosButton variant="black" className="px-2 py-1 text-xs" onClick={() => changeCartQty(key, -1)}>−</PosButton>
-                            <span className="inline-block min-w-[2rem] text-center">{item.qty}</span>
-                            <PosButton variant="black" className="px-2 py-1 text-xs" onClick={() => changeCartQty(key, +1)}>＋</PosButton>
-                          </div>
-                        </td>
-                        <td className="px-4 py-3 text-center text-[#dc2626] font-extrabold whitespace-nowrap">$ {fmt(item.qty * (item.price || 30))}</td>
-                      </tr>
-                    );
-                  })}
+                    <tr>
+                      <td className="px-4 py-6 text-center text-gray-400" colSpan={3}>
+                        No items added.
+                      </td>
+                    </tr>
+                  ) : (
+                    cart.map((item) => {
+                      const key = `${item.category}|${(item as any).subKey || ""}|${item.id}|${(item as any).grams || 0}`;
+                      return (
+                        <tr key={key} className="border-t hover:bg-red-50">
+                          <td className="px-4 py-3 font-semibold">
+                            {item.name}
+                            {item.category === "drinks" && (item as any).subKey
+                              ? ` (${(item as any).subKey === "espresso" ? "Espresso" : "Single Origin"})`
+                              : (item as any).grams
+                              ? ` ${(item as any).grams}g`
+                              : ""}
+                          </td>
+                          <td className="px-4 py-3 text-center">
+                            <div className="inline-flex items-center gap-2 justify-center">
+                              <PosButton variant="black" className="px-2 py-1 text-xs" onClick={() => changeCartQty(key, -1)}>
+                                −
+                              </PosButton>
+                              <span className="inline-block min-w-[2rem] text-center">{item.qty}</span>
+                              <PosButton variant="black" className="px-2 py-1 text-xs" onClick={() => changeCartQty(key, +1)}>
+                                ＋
+                              </PosButton>
+                            </div>
+                          </td>
+                          <td className="px-4 py-3 text-center text-[#dc2626] font-extrabold whitespace-nowrap">
+                            $ {fmt(item.qty * (item.price || 30))}
+                          </td>
+                        </tr>
+                      );
+                    })
+                  )}
                 </tbody>
               </table>
             </div>
@@ -392,7 +498,8 @@ export default function Delivery() {
                 <div className="text-gray-900 font-semibold">
                   Items: <b>$ {fmt(itemsTotal)}</b>
                   <span className="mx-2">+</span> Delivery Fee: <b>$ {fmt(deliveryFee)}</b>
-                  <span className="mx-2">=</span> Total: <span className="text-[#dc2626] font-extrabold text-lg">$ {fmt(grandTotal)}</span>
+                  <span className="mx-2">=</span> Total:{" "}
+                  <span className="text-[#dc2626] font-extrabold text-lg">$ {fmt(grandTotal)}</span>
                 </div>
                 <PosButton
                   variant="confirm"
