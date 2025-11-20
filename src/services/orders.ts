@@ -51,50 +51,142 @@ function endOfDay(d: Date) {
 }
 
 // ---------- 查詢訂單（支援 channel 過濾，回傳 items_total / delivery_fee / channel） ----------
+// ---------- 查詢訂單（同時相容 channel 與 is_delivery 兩種 schema） ----------
 export async function fetchOrders({
-  from, to, status = "all", channel = "ALL", page = 0, pageSize = 20,
-}: FetchParams) {
+  from, to, status = "all",
+  channel = "ALL",                // 新版用法
+  page = 0, pageSize = 20,
+}: FetchParams & { onlyDelivery?: boolean | null }) {
+
   const fromISO = from ? startOfDay(from) : undefined;
   const toISO   = to   ? endOfDay(to)   : undefined;
-
-  let q = supabase
-    .from("orders")
-    .select(`
-      id, created_at, status, payment_method,
-      items_total, delivery_fee, total, channel, delivery_info,
-      void_reason, voided_at,
-      order_items ( name, category, sub_key, grams, qty, price, sku )
-    `, { count: "exact" })
-    .order("created_at", { ascending: false });
-
-  if (fromISO) q = q.gte("created_at", fromISO);
-  if (toISO)   q = q.lte("created_at", toISO);
-  if (status !== "all") q = q.eq("status", status.toUpperCase());
-  if (channel !== "ALL") q = q.eq("channel", channel);
-
   const fromIdx = page * pageSize;
-  const toIdx = fromIdx + pageSize - 1;
+  const toIdx   = fromIdx + pageSize - 1;
 
-  const { data, error, count } = await q.range(fromIdx, toIdx);
-  if (error) throw error;
+  // ---- 1) 嘗試「新版 channel / delivery_info / items_total」取數 ----
+  const runChannel = async () => {
+    let q = supabase
+      .from("orders")
+      .select(`
+        id, created_at, status, payment_method,
+        items_total, delivery_fee, total, channel, delivery_info,
+        void_reason, voided_at,
+        order_items ( name, category, sub_key, grams, qty, price, sku )
+      `, { count: "exact" })
+      .order("created_at", { ascending: false });
 
-  const rows = (data ?? []).map((r: any) => ({
-    id: r.id,
-    createdAt: r.created_at,
-    paymentMethod: r.payment_method,
-    itemsTotal: r.items_total,
-    deliveryFee: r.delivery_fee,
-    total: r.total,
-    channel: r.channel as ("IN_STORE" | "DELIVERY"),
-    deliveryInfo: r.delivery_info ?? {},
-    voided: r.status === "VOIDED",
-    voidReason: r.void_reason ?? null,
-    voidedAt: r.voided_at ?? null,
-    items: r.order_items ?? [],
-  }));
+    if (fromISO) q = q.gte("created_at", fromISO);
+    if (toISO)   q = q.lte("created_at", toISO);
+    if (status !== "all") q = q.eq("status", status.toUpperCase());
+    if (channel !== "ALL") q = q.eq("channel", channel);
 
-  return { rows, count: count ?? 0 };
+    return q.range(fromIdx, toIdx);
+  };
+
+  // ---- 2) 回退「舊版 is_delivery / delivery / delivery_fee」取數 ----
+  const runLegacy = async () => {
+    let q = supabase
+      .from("orders")
+      .select(`
+        id,
+        created_at,
+        status,
+        payment_method,
+        total,
+        is_delivery,
+        delivery,
+        delivery_fee,
+        void_reason,
+        voided_at,
+        order_items (
+          name,
+          category,
+          sub_key,
+          grams,
+          qty,
+          price,
+          sku
+        )
+      `, { count: "exact" })
+      .order("created_at", { ascending: false });
+
+    if (fromISO) q = q.gte("created_at", fromISO);
+    if (toISO)   q = q.lte("created_at", toISO);
+    if (status !== "all") q = q.eq("status", status.toUpperCase());
+
+    return q.range(fromIdx, toIdx);
+  };
+
+  // 先走新版，錯了就回退舊版
+  let data: any[] | null = null, count: number | null = null;
+
+  try {
+    const ch = await runChannel();
+    if (ch.error) throw ch.error;
+    data = ch.data ?? [];
+    count = ch.count ?? 0;
+
+    // 統一成前端使用的欄位（兩版都產出 delivery / isDelivery）
+    const rows = data.map((r: any) => ({
+      id: r.id,
+      createdAt: r.created_at,
+      paymentMethod: r.payment_method,
+      // 若沒有 items_total，可自行用 items 加總，這裡以 total 為主
+      total: r.total,
+      deliveryFee: r.delivery_fee ?? 0,
+      voided: r.status === "VOIDED",
+      voidReason: r.void_reason ?? null,
+      voidedAt: r.voided_at ?? null,
+      // 新版來源
+      isDelivery: r.channel ? r.channel === "DELIVERY" : false,
+      delivery: r.delivery_info ?? null,
+      items: (r.order_items ?? []).map((it: any) => ({
+        name: it.name,
+        category: it.category ?? null,
+        subKey: it.sub_key ?? null,
+        grams: it.grams ?? null,
+        qty: it.qty,
+        price: it.price,
+        sku: it.sku ?? null,
+      })),
+    }));
+
+    return { rows, count: count ?? 0 };
+
+  } catch (e) {
+    // 改走舊版
+    const lg = await runLegacy();
+    if (lg.error) throw lg.error;
+    data = lg.data ?? [];
+    count = lg.count ?? 0;
+
+    const rows = data.map((r: any) => ({
+      id: r.id,
+      createdAt: r.created_at,
+      paymentMethod: r.payment_method,
+      total: r.total,
+      deliveryFee: r.delivery_fee ?? 0,
+      voided: r.status === "VOIDED",
+      voidReason: r.void_reason ?? null,
+      voidedAt: r.voided_at ?? null,
+      // 舊版來源
+      isDelivery: !!r.is_delivery,
+      delivery: r.delivery ?? null,
+      items: (r.order_items ?? []).map((it: any) => ({
+        name: it.name,
+        category: it.category ?? null,
+        subKey: it.sub_key ?? null,
+        grams: it.grams ?? null,
+        qty: it.qty,
+        price: it.price,
+        sku: it.sku ?? null,
+      })),
+    }));
+
+    return { rows, count: count ?? 0 };
+  }
 }
+
 
 // ---------- 下單（支援通路/運費/配送資訊） ----------
 export async function placeOrder(
@@ -134,15 +226,12 @@ export async function placeDelivery(
 }
 
 // ---------- 作廢訂單（保留你原本流程） ----------
-export async function voidOrderDB(orderId: string, opts?: { reason?: string }) {
-  const { error } = await supabase
-    .from("orders")
-    .update({
-      status: "VOIDED",
-      void_reason: opts?.reason ?? null,
-      voided_at: new Date().toISOString(),
-    })
-    .eq("id", orderId);
+export async function voidOrderDB(orderId: string, opts?: { reason?: string; restock?: boolean }) {
+  const { error } = await supabase.rpc("void_order", {
+    p_order_id: orderId,
+    p_reason: opts?.reason ?? null,
+    p_restock: opts?.restock ?? false,
+  });
   if (error) throw error;
 }
 

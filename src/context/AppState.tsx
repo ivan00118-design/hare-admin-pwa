@@ -9,6 +9,13 @@ import React, {
   useContext,
 } from "react";
 import { supabase } from "../supabaseClient";
+import {
+  fetchOrders,
+  placeOrder,
+  voidOrderDB,
+  restockByOrder,
+  type PlaceOrderItem,
+} from "../services/orders";
 
 // ====== 型別 ======
 export type Category = "drinks" | "HandDrip";
@@ -57,7 +64,7 @@ const DEFAULT_INV: Inventory = {
 
 type CartItem = UIItem & { qty: number; deductKg?: number };
 
-type Order = {
+export type Order = {
   id: string;
   createdAt: string;
   items: Array<
@@ -71,10 +78,14 @@ type Order = {
   voided?: boolean;
   voidedAt?: string | null;
   voidReason?: string | null;
+  // 來自 DB 的欄位（Dashboard 會用到）
+  isDelivery?: boolean;
+  delivery?: any;
+  deliveryFee?: number;
 };
 
 const POS_INV_KEY = "pos_inventory";
-const POS_ORD_KEY = "pos_orders";
+// const POS_ORD_KEY = "pos_orders"; // ✅ 不再使用 app_state 的 orders
 
 type Ctx = {
   ready: boolean;
@@ -94,6 +105,7 @@ type Ctx = {
     opt?: { restock?: boolean; reason?: string }
   ) => Promise<void>;
   repairInventory: () => Promise<void>;
+  reloadOrders: () => Promise<void>;
 };
 
 const AppStateContext = createContext<Ctx | null>(null);
@@ -104,9 +116,6 @@ export const useAppState = () => {
 };
 
 // ====== 小工具 ======
-const newId = () =>
-  crypto?.randomUUID ? crypto.randomUUID() : `${Date.now()}-${Math.random()}`;
-
 function deepClone<T>(v: T): T {
   return typeof structuredClone === "function"
     ? structuredClone(v)
@@ -259,64 +268,85 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
   const [inventory, _setInventory] = useState<Inventory>(DEFAULT_INV);
   const [orders, setOrders] = useState<Order[]>([]);
   const invVer = useRef<string | null>(null);
-  const ordVer = useRef<string | null>(null);
 
-  // 初始載入
+  // 只在 Provider 內定義，所有畫面共用
+  const reloadOrders = useCallback(async () => {
+    try {
+      const { rows } = await fetchOrders({ pageSize: 500, status: "all" });
+      setOrders(rows as Order[]);
+    } catch (e) {
+      console.error("[reloadOrders] failed:", e);
+    }
+  }, []);
+
+  // 初始載入：inventory 走 app_state；orders 走資料表；加上 Realtime 訂閱
   useEffect(() => {
     let alive = true;
     (async () => {
-      const org = await getOrgIdForCurrentUser();
-      if (!alive) return;
-      setOrgId(org);
+      try {
+        const org = await getOrgIdForCurrentUser();
+        if (!alive) return;
+        setOrgId(org);
 
-      const inv = await readAppState<Inventory>(org, POS_INV_KEY, DEFAULT_INV);
-      const ord = await readAppState<Order[]>(org, POS_ORD_KEY, []);
-      if (!alive) return;
+        // 只從 app_state 取 inventory
+        const inv = await readAppState<Inventory>(org, POS_INV_KEY, DEFAULT_INV);
+        if (!alive) return;
 
-      const normalizedInv = normalizeInventory(inv.value);
+        const normalizedInv = normalizeInventory(inv.value);
+        invVer.current = inv.updated_at;
+        _setInventory(dedupeInventory(normalizedInv));
 
-      invVer.current = inv.updated_at;
-      ordVer.current = ord.updated_at;
-      _setInventory(dedupeInventory(normalizedInv));
-      setOrders(ord.value);
-      setReady(true);
+        // 一進來就從 DB 抓 orders
+        await reloadOrders();
 
-      // Realtime（選配）
-      const ch = supabase
-        .channel(`app_state_${org}`)
-        .on(
-          "postgres_changes",
-          {
-            event: "*",
-            schema: "public",
-            table: "app_state",
-            filter: `org_id=eq.${org}`,
-          },
-          (payload) => {
-            const row = payload.new as any;
-            if (!row) return;
-            if (row.key === POS_INV_KEY) {
-              invVer.current = row.updated_at;
-              _setInventory(dedupeInventory(normalizeInventory(row.state)));
-            } else if (row.key === POS_ORD_KEY) {
-              ordVer.current = row.updated_at;
-              setOrders(row.state as Order[]);
+        setReady(true);
+
+        // Realtime：app_state（inventory）
+        const chInv = supabase
+          .channel(`app_state_${org}`)
+          .on(
+            "postgres_changes",
+            { event: "*", schema: "public", table: "app_state", filter: `org_id=eq.${org}` },
+            (payload) => {
+              const row = payload.new as any;
+              if (!row) return;
+              if (row.key === POS_INV_KEY) {
+                invVer.current = row.updated_at;
+                _setInventory(dedupeInventory(normalizeInventory(row.state)));
+              }
+              // ❌ 不再處理 POS_ORD_KEY，避免覆蓋 DB orders
             }
-          }
-        )
-        .subscribe();
+          )
+          .subscribe();
 
-      return () => {
-        supabase.removeChannel(ch);
-      };
-    })().catch((e) => {
-      console.error(e);
-      setReady(true);
-    });
+        // Realtime：orders / order_items 有異動就刷新
+        const chOrders = supabase
+          .channel("orders_realtime")
+          .on(
+            "postgres_changes",
+            { event: "*", schema: "public", table: "orders" },
+            () => reloadOrders()
+          )
+          .on(
+            "postgres_changes",
+            { event: "*", schema: "public", table: "order_items" },
+            () => reloadOrders()
+          )
+          .subscribe();
+
+        return () => {
+          supabase.removeChannel(chInv);
+          supabase.removeChannel(chOrders);
+        };
+      } catch (e) {
+        console.error(e);
+        setReady(true);
+      }
+    })();
     return () => {
       alive = false;
     };
-  }, []);
+  }, [reloadOrders]);
 
   const setInventory = useCallback(
     async (updater: Inventory | ((prev: Inventory) => Inventory)) => {
@@ -331,144 +361,47 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
     [orgId, inventory]
   );
 
+  // 相容用：把門市 createOrder 轉為呼叫 DB placeOrder（不要再寫 app_state）
   const createOrder = useCallback(
     async (
       cart: CartItem[] = [],
-      totalFromUI?: number,
+      _totalFromUI?: number,
       extra?: { paymentMethod?: string }
     ) => {
-      if (!orgId) return null;
       if (!Array.isArray(cart) || cart.length === 0) return null;
 
-      // 計算扣庫存（飲品使用 usagePerCup；豆子用 grams/1000）
-      const calcDeductKg = (it: CartItem) => {
-        if (typeof it.deductKg !== "undefined")
-          return Math.max(0, Number(it.deductKg) || 0);
-        if (it.category === "drinks") {
-          return Math.max(
-            0,
-            (Number((it as any).usagePerCup) || 0.02) * (Number(it.qty) || 0)
-          );
-        }
-        const grams = Number(it.grams) || 0;
-        return Math.max(0, (grams * (Number(it.qty) || 0)) / 1000);
-      };
+      const items: PlaceOrderItem[] = cart.map((it) => {
+        const isDrink = it.category === "drinks";
+        return {
+          name: it.name,
+          sku: isDrink
+            ? `${it.id}-${(it as any).subKey ?? ""}`
+            : `${it.id}-${(it as any).grams ?? 0}g`,
+          qty: it.qty,
+          price: (it as any).price || 30,
+          category: isDrink ? "drinks" : "HandDrip",
+          sub_key: isDrink ? ((it as any).subKey as any) : undefined,
+          grams: isDrink ? undefined : Number((it as any).grams ?? 0) || undefined,
+        };
+      });
 
-      const nextInv = deepClone(inventory);
-      for (const it of cart) {
-        const d = calcDeductKg(it);
-        const mutate = (arr: any[]) =>
-          arr.map((p: any) =>
-            p.id === it.id
-              ? { ...p, stock: Math.max(0, (Number(p.stock) || 0) - d) }
-              : p
-          );
-        if (it.category === "drinks") {
-          const key = it.subKey as DrinkSubKey;
-          nextInv.store.drinks[key] = mutate(nextInv.store.drinks[key] || []);
-        } else {
-          nextInv.store.HandDrip = mutate(nextInv.store.HandDrip || []);
-        }
-      }
-
-      const items = cart.map(({ id, name, qty, price, grams, category, subKey }) => ({
-        id,
-        name,
-        qty,
-        price,
-        grams: grams ?? null,
-        category,
-        subKey: subKey ?? null,
-      }));
-      const total =
-        typeof totalFromUI === "number"
-          ? totalFromUI
-          : items.reduce(
-              (s, x) => s + (Number(x.price) || 0) * (Number(x.qty) || 0),
-              0
-            );
-
-      const order: Order = {
-        id: newId(),
-        createdAt: new Date().toISOString(),
-        items,
-        total,
-        paymentMethod: extra?.paymentMethod,
-        voided: false,
-      };
-
-      const nextOrders = [order, ...orders];
-
-      // 一次 upsert 兩筆 app_state（不帶 on_conflict 參數）
-      const { error } = await supabase
-        .from("app_state")
-        .upsert([
-          { org_id: orgId, key: POS_INV_KEY, state: nextInv },
-          { org_id: orgId, key: POS_ORD_KEY, state: nextOrders },
-        ]);
-      if (error) throw error;
-
-      _setInventory(nextInv);
-      setOrders(nextOrders);
-      return order.id;
+      const id = await placeOrder(items, extra?.paymentMethod || "Cash", "ACTIVE");
+      await reloadOrders();
+      return id;
     },
-    [orgId, inventory, orders]
+    [reloadOrders]
   );
 
+  // 作廢走 DB；（可選）回補庫存再自己實作
   const voidOrder = useCallback(
-    async (
-      orderId: string,
-      opt?: { restock?: boolean; reason?: string }
-    ) => {
-      if (!orgId) return;
-      const now = new Date().toISOString();
-      let nextInv = deepClone(inventory);
-      const nextOrders = orders.map((o) =>
-        o.id === orderId
-          ? {
-              ...o,
-              voided: true,
-              voidedAt: now,
-              voidReason: opt?.reason ?? "",
-            }
-          : o
-      );
-
+    async (orderId: string, opt?: { restock?: boolean; reason?: string }) => {
+      await voidOrderDB(orderId, { reason: opt?.reason });
       if (opt?.restock) {
-        const target = orders.find((o) => o.id === orderId);
-        if (target) {
-          for (const it of target.items || []) {
-            const perUnit =
-              it.category === "drinks"
-                ? ((it as any).usagePerCup || 0.02)
-                : (Number(it.grams) || 0) / 1000;
-            const d = perUnit * (Number((it as any).qty) || 0);
-            const mapOne = (p: any) =>
-              p.id === it.id
-                ? { ...p, stock: (Number(p.stock) || 0) + d }
-                : p;
-            if (it.category === "drinks") {
-              const key = it.subKey as DrinkSubKey;
-              nextInv.store.drinks[key] = (nextInv.store.drinks[key] || []).map(mapOne);
-            } else {
-              nextInv.store.HandDrip = (nextInv.store.HandDrip || []).map(mapOne);
-            }
-          }
-        }
+        try { await restockByOrder(orderId); } catch {}
       }
-
-      const { error } = await supabase
-        .from("app_state")
-        .upsert([
-          { org_id: orgId, key: POS_INV_KEY, state: nextInv },
-          { org_id: orgId, key: POS_ORD_KEY, state: nextOrders },
-        ]);
-      if (error) throw error;
-
-      _setInventory(nextInv);
-      setOrders(nextOrders);
+      await reloadOrders();
     },
-    [orgId, inventory, orders]
+    [reloadOrders]
   );
 
   const repairInventory = useCallback(async () => {
@@ -488,8 +421,9 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
       createOrder,
       voidOrder,
       repairInventory,
+      reloadOrders,
     }),
-    [ready, orgId, inventory, orders, setInventory, createOrder, voidOrder, repairInventory]
+    [ready, orgId, inventory, orders, setInventory, createOrder, voidOrder, repairInventory, reloadOrders]
   );
 
   return <AppStateContext.Provider value={value}>{children}</AppStateContext.Provider>;
