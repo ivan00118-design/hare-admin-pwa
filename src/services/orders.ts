@@ -226,14 +226,16 @@ export async function placeDelivery(
 }
 
 // ---------- 作廢訂單（保留你原本流程） ----------
+// src/services/orders.ts
 export async function voidOrderDB(orderId: string, opts?: { reason?: string; restock?: boolean }) {
   const { error } = await supabase.rpc("void_order", {
     p_order_id: orderId,
     p_reason: opts?.reason ?? null,
-    p_restock: opts?.restock ?? false,
+    p_restock: !!opts?.restock,
   });
   if (error) throw error;
 }
+
 
 // （預留）若需回補庫存可在此實作
 export async function restockByOrder(_orderId: string) {

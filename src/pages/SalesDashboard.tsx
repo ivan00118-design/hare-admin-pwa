@@ -1,19 +1,11 @@
 import React, { useMemo, useRef, useState } from "react";
-import {
-  useAppState,
-  type Category,
-  type DrinkSubKey,
-  type UIItem,
-} from "../context/AppState";
+import { useAppState, type Category, type DrinkSubKey, type UIItem } from "../context/AppState";
 import PosButton from "../components/PosButton.jsx";
+import { upsertProduct, deleteProduct } from "../services/inventory";
 
 import iconSimplePay from "../assets/payments/SimplePay.jpg";
 import iconCash from "../assets/payments/Cash.png";
 import iconMacauPass from "../assets/payments/MacauPass.png";
-
-// ⬇️ 新增：改走 Supabase
-import { placeOrder } from "../services/orders";
-import { useNavigate } from "react-router-dom";
 
 // --------- 可判別聯合 CartItem 型別 ---------
 type DrinkCartItem = UIItem & {
@@ -41,17 +33,17 @@ const fmt = (n: number) => {
   return Number.isInteger(r) ? String(r) : r.toFixed(2).replace(/0+$/, "").replace(/\.$/, "");
 };
 
+const genSku = () =>
+  (crypto?.randomUUID?.() ? crypto.randomUUID() : Math.random().toString(36).slice(2, 10));
+
 export default function SalesDashboard() {
-  // ⬇️ 移除 createOrder，改由 services/orders.ts 的 placeOrder 寫入 DB
-  const { inventory, setInventory } = useAppState();
-  const navigate = useNavigate();
+  const { inventory, setInventory, createOrder, reloadInventory } = useAppState();
 
   const [activeTab, setActiveTab] = useState<Category>("drinks");
   const [drinkSubTab, setDrinkSubTab] = useState<DrinkSubKey>("espresso");
   const [cart, setCart] = useState<CartItem[]>([]);
   const [editMode, setEditMode] = useState(false);
   const [paymentMethod, setPaymentMethod] = useState("");
-  const [saving, setSaving] = useState(false); // ⬅️ 避免重複送單
 
   const PAYMENT_OPTIONS = [
     { key: "SimplePay", label: "SimplePay", icon: iconSimplePay },
@@ -59,12 +51,14 @@ export default function SalesDashboard() {
     { key: "MacauPass", label: "MacauPass", icon: iconMacauPass },
   ] as const;
 
-  const drinks = (inventory?.store?.drinks || { espresso: [], singleOrigin: [] }) as any;
+  // 依目前 tab 取得商品清單
+  const drinks = inventory?.store?.drinks || { espresso: [], singleOrigin: [] } as any;
   const products: any[] =
     activeTab === "drinks"
       ? ((drinks as any)[drinkSubTab] || [])
       : (inventory?.store?.HandDrip || []);
 
+  // Beans 分組（同品名不同克數）
   const beanGroups = useMemo(() => {
     if (activeTab === "drinks") return [] as Array<[string, any[]]>;
     const map = new Map<string, any[]>();
@@ -87,83 +81,120 @@ export default function SalesDashboard() {
   const cellInputCls =
     "w-full sm:max-w-[110px] mx-auto border border-[#dc2626] rounded px-3 py-2 h-11 leading-6 text-base text-left md:text-center";
 
+  // 新增商品用
   const [newProduct, setNewProduct] = useState<any>({
     name: "",
-    stock: 0,
     price: 0,
-    usagePerCup: 0.02,
-    grams: 250,
+    usagePerCup: 0.02, // drinks 用
+    grams: 250,        // beans 用
   });
 
-  const handleEditField = (
+  // ========= 編輯模式：本地先改，RPC 持久化 =========
+
+  /** 共用：本地同步 UI（不落 DB；僅讓使用者編輯時不跳回） */
+  const patchLocalItem = (
     category: Category,
     subKey: DrinkSubKey | null,
     id: string,
-    field: string,
-    value: string
+    partial: Record<string, any>
   ) => {
     setInventory((prev) => {
       const next = structuredClone(prev);
-      const v = field === "name" ? value : parseFloat(value) || 0;
-      if (category === "drinks") {
-        next.store.drinks[subKey as DrinkSubKey] = (next.store.drinks[subKey as DrinkSubKey] || []).map((it: any) =>
-          it.id === id ? { ...it, [field]: v } : it
+      if (category === "drinks" && subKey) {
+        next.store.drinks[subKey] = (next.store.drinks[subKey] || []).map((it: any) =>
+          it.id === id ? { ...it, ...partial } : it
         );
       } else {
         next.store.HandDrip = (next.store.HandDrip || []).map((it: any) =>
-          it.id === id ? { ...it, [field]: v } : it
+          it.id === id ? { ...it, ...partial } : it
         );
       }
       return next;
     });
   };
 
-  const handleAddProduct = (e?: React.SyntheticEvent) => {
+  /** Drinks：變更 price / usagePerCup / name → upsert_product */
+  const saveDrinkField = async (it: any, subKey: DrinkSubKey, field: "price" | "usagePerCup" | "name", raw: string) => {
+    const value = field === "name" ? raw : parseFloat(raw) || 0;
+    // 先本地更新
+    patchLocalItem("drinks", subKey, it.id, { [field]: value });
+    // 再 RPC 持久化
+    await upsertProduct({
+      sku: it.id, // id 即 sku
+      name: field === "name" ? String(value) : it.name,
+      category: "drinks",
+      sub_key: subKey,
+      usage_per_cup: field === "usagePerCup" ? Number(value) : Number(it.usagePerCup ?? 0.02),
+      price: field === "price" ? Number(value) : Number(it.price ?? 0),
+    });
+    // 與 DB 對齊
+    await reloadInventory();
+  };
+
+  /** Beans：變更 price / name（grams 暫不允許直接改，以免改 SKU） */
+  const saveBeanField = async (it: any, field: "price" | "name", raw: string) => {
+    const value = field === "name" ? raw : parseFloat(raw) || 0;
+    patchLocalItem("HandDrip", null, it.id, { [field]: value });
+    await upsertProduct({
+      sku: it.id,
+      name: field === "name" ? String(value) : it.name,
+      category: "HandDrip",
+      grams: Number(it.grams || 0),
+      price: field === "price" ? Number(value) : Number(it.price ?? 0),
+    });
+    await reloadInventory();
+  };
+
+  /** 刪除商品（變體） */
+  const handleDelete = async (category: Category, subKey: DrinkSubKey | null, id: string) => {
+    await deleteProduct(id); // id 即 sku
+    await reloadInventory();
+  };
+
+  /** 新增商品：建立新 SKU → upsert_product → reload */
+  const handleAddProduct = async (e?: React.SyntheticEvent) => {
     e?.preventDefault?.();
     const name = (newProduct.name || "").trim();
     if (!name) return alert("請輸入商品名稱");
-    const gramsVal = activeTab === "drinks" ? 0 : Number(newProduct.grams || 0);
 
-    const uniqKey = [activeTab, activeTab === "drinks" ? drinkSubTab : "", name.toLowerCase(), gramsVal].join("|");
+    // 防連點
+    const uniqKey =
+      activeTab === "drinks"
+        ? `d|${drinkSubTab}|${name.toLowerCase()}`
+        : `b|${name.toLowerCase()}|${Number(newProduct.grams || 0)}`;
     if (addGuardRef.current.has(uniqKey)) return;
     addGuardRef.current.add(uniqKey);
     setTimeout(() => addGuardRef.current.delete(uniqKey), 800);
 
-    setInventory((prev) => {
-      const next = structuredClone(prev);
-      if (activeTab === "drinks") {
-        const list: any[] = next.store.drinks[drinkSubTab] || [];
-        if (list.some((p) => (p.name || "").trim().toLowerCase() === name.toLowerCase())) return prev;
-        list.push({
-          id: crypto?.randomUUID ? crypto.randomUUID() : String(Date.now()),
-          name,
-          stock: 0,
-          price: Number(newProduct.price) || 0,
-          unit: "kg",
-          usagePerCup: Number(newProduct.usagePerCup) || 0.02,
-        });
-        next.store.drinks[drinkSubTab] = list;
-      } else {
-        const list: any[] = next.store.HandDrip || [];
-        if (list.some((p) => (p.name || "").trim().toLowerCase() === name.toLowerCase() && Number(p.grams) === gramsVal))
-          return prev;
-        list.push({
-          id: crypto?.randomUUID ? crypto.randomUUID() : String(Date.now()),
-          name,
-          stock: 0,
-          price: Number(newProduct.price) || 0,
-          unit: "kg",
-          grams: gramsVal,
-        });
-        next.store.HandDrip = list;
-      }
-      return next;
-    });
+    if (activeTab === "drinks") {
+      const sku = `${genSku()}-${drinkSubTab}`;
+      await upsertProduct({
+        sku,
+        name,
+        category: "drinks",
+        sub_key: drinkSubTab,
+        usage_per_cup: Number(newProduct.usagePerCup) || 0.02,
+        price: Number(newProduct.price) || 0,
+      });
+    } else {
+      const gramsVal = Number(newProduct.grams || 0);
+      if (!gramsVal) return alert("請選擇克數");
+      const sku = `${genSku()}-${gramsVal}g`;
+      await upsertProduct({
+        sku,
+        name,
+        category: "HandDrip",
+        grams: gramsVal,
+        price: Number(newProduct.price) || 0,
+      });
+    }
 
-    setNewProduct({ name: "", stock: 0, price: 0, usagePerCup: 0.02, grams: 250 });
+    await reloadInventory();
+    setNewProduct({ name: "", price: 0, usagePerCup: 0.02, grams: 250 });
   };
 
-  // --------- 使用可判別聯合的 addToCart ----------
+  // ========= 購物車 / 下單 =========
+
   const addToCart = (item: any, qty: number, grams: number | null = null) => {
     const parsed = Number(qty);
     if (!Number.isFinite(parsed) || parsed <= 0) return;
@@ -211,7 +242,6 @@ export default function SalesDashboard() {
 
   const totalAmount = cart.reduce((s, i) => s + i.qty * (i.price || 30), 0);
 
-  // --------- 使用可判別聯合的 changeCartQty ----------
   const changeCartQty = (key: string, delta: number) => {
     setCart((prev: CartItem[]) =>
       prev
@@ -231,46 +261,16 @@ export default function SalesDashboard() {
     );
   };
 
-  // ⬇️ 重寫：按 Confirm -> 直接寫入 Supabase
   const handleCheckout = async () => {
-  if (!paymentMethod) {
-    alert("請先選擇支付方式（SimplePay / Cash / MacauPass）");
-    return;
-  }
-  if (cart.length === 0) return;
-
-  // 🔴 組 payload：把 category / grams / sub_key 一起送進去
-  const payload = cart.map((it: CartItem) => {
-    const isDrink = it.category === "drinks";
-    return {
-      name: it.name,
-      sku: isDrink
-        ? `${it.id}-${(it as DrinkCartItem).subKey}`
-        : `${it.id}-${(it as BeanCartItem).grams}g`,
-      qty: it.qty,
-      price: it.price || 30,
-
-      // 建議用 undefined 表示不適用的欄位，以配合 PlaceOrderItem 型別
-      category: it.category as "HandDrip" | "drinks",
-      sub_key: isDrink ? (it as DrinkCartItem).subKey : undefined,
-      grams:  isDrink ? undefined : (it as BeanCartItem).grams ?? undefined,
-    };
-  });
-
-    setSaving(true);
-  try {
-    const newId = await placeOrder(payload, paymentMethod, "ACTIVE");
-    alert(`✅ Order Completed（#${newId}，付款：${paymentMethod}）`);
+    if (!paymentMethod) return alert("請先選擇支付方式（SimplePay / Cash / MacauPass）");
+    const id = await createOrder(cart, totalAmount, { paymentMethod });
+    if (!id) return;
+    alert(`✅ Order Completed（付款方式：${paymentMethod}）`);
     setCart([]);
     setPaymentMethod("");
-  } catch (e: any) {
-    console.error(e);
-    alert(e?.message ?? "Create order failed");
-  } finally {
-    setSaving(false);
-  }
-};
+  };
 
+  // ========= UI =========
   return (
     <div className="p-6 bg-gray-50 min-h-screen">
       {/* 編輯模式切換 */}
@@ -388,27 +388,43 @@ export default function SalesDashboard() {
                     {(products as any[]).map((item: any) => (
                       <tr key={item.id} className="border-t border-gray-200">
                         <td className="px-3 py-2 font-semibold truncate" title={item.name}>
-                          {item.name}
+                          {/* 可改名 */}
+                          <input
+                            type="text"
+                            defaultValue={item.name}
+                            onBlur={(e) =>
+                              activeTab === "drinks"
+                                ? saveDrinkField(item, drinkSubTab, "name", e.target.value)
+                                : saveBeanField(item, "name", e.target.value)
+                            }
+                            className={nameInputCls}
+                          />
                         </td>
+
+                        {/* Price */}
                         <td className="px-3 py-2 text-center">
                           <input
                             type="number"
                             step="1"
-                            value={item.price}
-                            onChange={(e) =>
-                              handleEditField(activeTab, drinkSubTab, item.id, "price", e.target.value)
+                            defaultValue={item.price}
+                            onBlur={(e) =>
+                              activeTab === "drinks"
+                                ? saveDrinkField(item, drinkSubTab, "price", e.target.value)
+                                : saveBeanField(item, "price", e.target.value)
                             }
                             className={cellInputCls}
                           />
                         </td>
+
+                        {/* Usage / Grams */}
                         <td className="px-3 py-2 text-center">
                           {activeTab === "drinks" ? (
                             <input
                               type="number"
                               step="0.001"
-                              value={item.usagePerCup || 0.02}
-                              onChange={(e) =>
-                                handleEditField(activeTab, drinkSubTab, item.id, "usagePerCup", e.target.value)
+                              defaultValue={item.usagePerCup || 0.02}
+                              onBlur={(e) =>
+                                saveDrinkField(item, drinkSubTab, "usagePerCup", e.target.value)
                               }
                               className={cellInputCls}
                             />
@@ -417,38 +433,27 @@ export default function SalesDashboard() {
                               type="number"
                               step="1"
                               value={item.grams || 0}
-                              onChange={(e) =>
-                                handleEditField("HandDrip", null, item.id, "grams", e.target.value)
-                              }
-                              className={cellInputCls}
+                              readOnly
+                              title="為避免 SKU 被改動，Grams 暫不允許直接修改。如需變更克數，請新增新變體後刪除舊變體。"
+                              className={cellInputCls + " !bg-gray-50 !text-gray-500 cursor-not-allowed"}
                             />
                           )}
                         </td>
+
+                        {/* 刪除 */}
                         <td className="px-3 py-2 text-center">
                           <PosButton
                             variant="black"
                             className="w-full sm:max-w-[110px] mx-auto h-11"
-                            onClick={() =>
-                              setInventory((prev) => {
-                                const next = structuredClone(prev);
-                                if (activeTab === "drinks") {
-                                  next.store.drinks[drinkSubTab] = (next.store.drinks[drinkSubTab] || []).filter(
-                                    (x: any) => x.id !== item.id
-                                  );
-                                } else {
-                                  next.store.HandDrip = (next.store.HandDrip || []).filter(
-                                    (x: any) => x.id !== item.id
-                                  );
-                                }
-                                return next;
-                              })
-                            }
+                            onClick={() => handleDelete(activeTab, activeTab === "drinks" ? drinkSubTab : null, item.id)}
+                            title="Delete variant"
                           >
                             -
                           </PosButton>
                         </td>
                       </tr>
                     ))}
+
                     {/* 新增列 */}
                     <tr className="border-t bg-gray-50">
                       <td className="px-3 py-2">
@@ -560,6 +565,13 @@ export default function SalesDashboard() {
                                 −
                               </PosButton>
                               <span className="inline-block min-w-[2rem] text-center">{item.qty}</span>
+                              <PosButton
+                                variant="black"
+                                className="px-2 py-1 text-xs !text-black hover:!text-black focus:!text-black"
+                                onClick={() => changeCartQty(key, +1)}
+                              >
+                                ＋
+                              </PosButton>
                             </div>
                           </td>
                           <td className="px-4 py-3 text-center text-[#dc2626] font-extrabold whitespace-nowrap">
@@ -610,7 +622,7 @@ export default function SalesDashboard() {
                   className="!bg-white !text-black !border !border-gray-300 shadow-md hover:!bg-gray-100 active:!bg-gray-200 focus:!ring-2 focus:!ring-black"
                   style={{ colorScheme: "light" }}
                   onClick={handleCheckout}
-                  disabled={cart.length === 0 || !paymentMethod || saving}  // ⬅️ 加入 saving
+                  disabled={cart.length === 0 || !paymentMethod}
                   title={paymentMethod ? `Pay by ${paymentMethod}` : "Please choose payment first"}
                 >
                   ✅ Confirm Order
