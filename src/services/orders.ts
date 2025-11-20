@@ -230,7 +230,10 @@ export type PlaceOrderItem = {
   name: string;
   sku?: string;
   qty: number;
-  price: number; // 與 DB 單位一致（元或分）
+  price: number;
+  category?: string;
+  grams?: number;
+  sub_key?: string | null;
 };
 
 /** 透過 RPC place_order 寫入主檔 + 明細；回傳新訂單 id */

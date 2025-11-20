@@ -233,36 +233,43 @@ export default function SalesDashboard() {
 
   // ⬇️ 重寫：按 Confirm -> 直接寫入 Supabase
   const handleCheckout = async () => {
-    if (!paymentMethod) return alert("請先選擇支付方式（SimplePay / Cash / MacauPass）");
-    if (cart.length === 0) return;
+  if (!paymentMethod) {
+    alert("請先選擇支付方式（SimplePay / Cash / MacauPass）");
+    return;
+  }
+  if (cart.length === 0) return;
 
-    // 轉成 RPC 需要的 payload（name/sku/qty/price）
-    const payload = cart.map((it) => ({
+  // 🔴 組 payload：把 category / grams / sub_key 一起送進去
+  const payload = cart.map((it: CartItem) => {
+    const isDrink = it.category === "drinks";
+    return {
       name: it.name,
-      // sku 可放入你想識別的維度（例如 drinks 的子類別或豆子的克數）
-      sku:
-        it.category === "drinks"
-          ? `${it.id}-${(it as DrinkCartItem).subKey}`
-          : `${it.id}-${(it as BeanCartItem).grams}g`,
+      sku: isDrink
+        ? `${it.id}-${(it as DrinkCartItem).subKey}`
+        : `${it.id}-${(it as BeanCartItem).grams}g`,
       qty: it.qty,
       price: it.price || 30,
-    }));
+
+      // 建議用 undefined 表示不適用的欄位，以配合 PlaceOrderItem 型別
+      category: it.category as "HandDrip" | "drinks",
+      sub_key: isDrink ? (it as DrinkCartItem).subKey : undefined,
+      grams:  isDrink ? undefined : (it as BeanCartItem).grams ?? undefined,
+    };
+  });
 
     setSaving(true);
-    try {
-      const id = await placeOrder(payload, paymentMethod, "ACTIVE"); // ⬅️ 呼叫 Supabase RPC
-      alert(`✅ Order Completed（#${id}，付款：${paymentMethod}）`);
-      setCart([]);
-      setPaymentMethod("");
-      // 可選：跳到歷史頁
-      // navigate("/history");
-    } catch (e: any) {
-      console.error(e);
-      alert(e?.message ?? "Create order failed");
-    } finally {
-      setSaving(false);
-    }
-  };
+  try {
+    const newId = await placeOrder(payload, paymentMethod, "ACTIVE");
+    alert(`✅ Order Completed（#${newId}，付款：${paymentMethod}）`);
+    setCart([]);
+    setPaymentMethod("");
+  } catch (e: any) {
+    console.error(e);
+    alert(e?.message ?? "Create order failed");
+  } finally {
+    setSaving(false);
+  }
+};
 
   return (
     <div className="p-6 bg-gray-50 min-h-screen">
