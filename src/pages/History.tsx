@@ -1,7 +1,7 @@
 // src/pages/History.tsx
 import React, { useEffect, useMemo, useState } from "react";
 import PosButton from "../components/PosButton.jsx";
-import { fetchOrders, voidOrderDB } from "../services/orders"; // ⬅ DB 服務
+import { fetchOrders, voidOrderDB } from "../services/orders";
 
 const fmtMoney = (n: number) => {
   const v = Number(n) || 0;
@@ -19,29 +19,37 @@ export default function History() {
 
   const [rows, setRows] = useState<any[]>([]);
   const [count, setCount] = useState(0);
-  const [totalAmount, setTotalAmount] = useState(0);
   const [expandedId, setExpandedId] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
 
-  const totalGross = useMemo(() => totalAmount, [totalAmount]);
+  // 由目前 rows 加總總額（避免依賴 services 回傳 totalAmount）
+  const totalGross = useMemo(
+    () => rows.reduce((s, r) => s + (Number(r?.total) || 0), 0),
+    [rows]
+  );
 
   async function load() {
     setLoading(true);
     try {
-      const res = await fetchOrders({
+      const { rows, count } = await fetchOrders({
         from: fromDate ? new Date(fromDate) : null,
-        to: toDate ? new Date(toDate) : null,
+        to:   toDate   ? new Date(toDate)   : null,
         status,
         page: 0,
         pageSize: 200,
       });
-      setRows(res.rows);
-      setCount(res.count);
-      setTotalAmount(res.totalAmount);
-    } finally { setLoading(false); }
+      setRows(rows);
+      setCount(count);
+      // 不再讀 res.totalAmount；總額由 totalGross 透過 rows 自動計算
+    } finally {
+      setLoading(false);
+    }
   }
 
-  useEffect(() => { load(); /* eslint-disable-next-line */ }, [fromDate, toDate, status]);
+  useEffect(() => {
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    load();
+  }, [fromDate, toDate, status]);
 
   async function askVoid(order: any) {
     const reason = window.prompt("作廢原因（可留空）：", "") || "";
@@ -58,27 +66,52 @@ export default function History() {
         <div className="flex flex-wrap gap-3 items-end">
           <div>
             <label className="block text-xs font-semibold text-gray-600 mb-1">From</label>
-            <input type="date" value={fromDate} onChange={(e) => setFromDate(e.target.value)} className="border rounded px-3 h-10" />
+            <input
+              type="date"
+              value={fromDate}
+              onChange={(e) => setFromDate(e.target.value)}
+              className="border rounded px-3 h-10"
+            />
           </div>
           <div>
             <label className="block text-xs font-semibold text-gray-600 mb-1">To</label>
-            <input type="date" value={toDate} onChange={(e) => setToDate(e.target.value)} className="border rounded px-3 h-10" />
+            <input
+              type="date"
+              value={toDate}
+              onChange={(e) => setToDate(e.target.value)}
+              className="border rounded px-3 h-10"
+            />
           </div>
           <div>
             <label className="block text-xs font-semibold text-gray-600 mb-1">Status</label>
-            <select value={status} onChange={(e) => setStatus(e.target.value as any)} className="border rounded px-3 h-10">
+            <select
+              value={status}
+              onChange={(e) => setStatus(e.target.value as any)}
+              className="border rounded px-3 h-10"
+            >
               <option value="all">All</option>
               <option value="active">Active</option>
               <option value="voided">Voided</option>
             </select>
           </div>
-          <PosButton variant="tab" onClick={() => { setFromDate(""); setToDate(""); setStatus("all"); }}>
+          <PosButton
+            variant="tab"
+            onClick={() => {
+              setFromDate("");
+              setToDate("");
+              setStatus("all");
+            }}
+          >
             Clear
           </PosButton>
 
           <div className="ml-auto text-sm text-gray-600">
-            <span className="mr-4">Count: <b>{count}</b></span>
-            <span>Total: <b>MOP$ {fmtMoney(totalGross)}</b></span>
+            <span className="mr-4">
+              Count: <b>{count}</b>
+            </span>
+            <span>
+              Total: <b>MOP$ {fmtMoney(totalGross)}</b>
+            </span>
           </div>
         </div>
       </div>
@@ -97,60 +130,86 @@ export default function History() {
           </thead>
           <tbody>
             {!loading && rows.length === 0 ? (
-              <tr><td colSpan={6} className="px-4 py-6 text-center text-gray-400">No records.</td></tr>
-            ) : rows.map((o) => {
-              const isOpen = expandedId === o.id;
-              const shortId = (o.id || "").slice(-6);
-              return (
-                <React.Fragment key={o.id}>
-                  <tr className="border-t border-gray-200 align-top">
-                    <td className="px-4 py-3">
-                      <div className="font-medium">{fmtTime(o.createdAt)}</div>
-                      {o.voided ? (
-                        <span className="inline-block mt-1 text-[11px] px-2 py-[2px] rounded bg-red-100 text-red-700">VOIDED</span>
-                      ) : (
-                        <span className="inline-block mt-1 text-[11px] px-2 py-[2px] rounded bg-emerald-100 text-emerald-700">ACTIVE</span>
-                      )}
-                    </td>
-                    <td className="px-4 py-3"><div className="font-mono">{shortId}</div></td>
-                    <td className="px-4 py-3">{o.paymentMethod || <span className="text-gray-400">—</span>}</td>
-                    <td className="px-4 py-3">
-                      <button
-                        type="button"
-                        className="underline underline-offset-2 decoration-gray-400 hover:text-black"
-                        onClick={() => setExpandedId(isOpen ? null : o.id)}
-                        title="Toggle details"
-                      >
-                        {isOpen ? "Hide" : "Show"} details ({Array.isArray(o.items) ? o.items.length : 0})
-                      </button>
-                      {isOpen && Array.isArray(o.items) && (
-                        <div className="mt-2 rounded border border-gray-200 bg-gray-50 p-2">
-                          <ul className="list-disc pl-4">
-                            {o.items.map((it: any, idx: number) => (
-                              <li key={idx} className="mb-1">
-                                <span className="font-medium">{it.name}</span>
-                                {it.category === "drinks" && it.subKey
-                                  ? ` (${it.subKey === "espresso" ? "Espresso" : "Single Origin"})`
-                                  : it.grams
-                                  ? ` (${it.grams}g)`
-                                  : ""} · Qty: {it.qty} · Price: {fmtMoney(it.price)}
-                                {" · "}Subtotal: {fmtMoney((Number(it.qty) || 0) * (Number(it.price) || 0))}
-                              </li>
-                            ))}
-                          </ul>
-                        </div>
-                      )}
-                    </td>
-                    <td className="px-4 py-3 text-right font-extrabold text-[#dc2626]">MOP$ {fmtMoney(o.total)}</td>
-                    <td className="px-4 py-3 text-center">
-                      {o.voided ? <span className="text-gray-400">—</span> : (
-                        <PosButton variant="black" onClick={() => askVoid(o)} title="Void this order">Void</PosButton>
-                      )}
-                    </td>
-                  </tr>
-                </React.Fragment>
-              );
-            })}
+              <tr>
+                <td colSpan={6} className="px-4 py-6 text-center text-gray-400">
+                  No records.
+                </td>
+              </tr>
+            ) : (
+              rows.map((o) => {
+                const isOpen = expandedId === o.id;
+                const shortId = (o.id || "").slice(-6);
+                return (
+                  <React.Fragment key={o.id}>
+                    <tr className="border-t border-gray-200 align-top">
+                      <td className="px-4 py-3">
+                        <div className="font-medium">{fmtTime(o.createdAt)}</div>
+                        {o.voided ? (
+                          <span className="inline-block mt-1 text-[11px] px-2 py-[2px] rounded bg-red-100 text-red-700">
+                            VOIDED
+                          </span>
+                        ) : (
+                          <span className="inline-block mt-1 text-[11px] px-2 py-[2px] rounded bg-emerald-100 text-emerald-700">
+                            ACTIVE
+                          </span>
+                        )}
+                      </td>
+                      <td className="px-4 py-3">
+                        <div className="font-mono">{shortId}</div>
+                      </td>
+                      <td className="px-4 py-3">
+                        {o.paymentMethod || <span className="text-gray-400">—</span>}
+                      </td>
+                      <td className="px-4 py-3">
+                        <button
+                          type="button"
+                          className="underline underline-offset-2 decoration-gray-400 hover:text-black"
+                          onClick={() => setExpandedId(isOpen ? null : o.id)}
+                          title="Toggle details"
+                        >
+                          {isOpen ? "Hide" : "Show"} details (
+                          {Array.isArray(o.items) ? o.items.length : 0})
+                        </button>
+                        {isOpen && Array.isArray(o.items) && (
+                          <div className="mt-2 rounded border border-gray-200 bg-gray-50 p-2">
+                            <ul className="list-disc pl-4">
+                              {o.items.map((it: any, idx: number) => (
+                                <li key={idx} className="mb-1">
+                                  <span className="font-medium">{it.name}</span>
+                                  {it.category === "drinks" && it.subKey
+                                    ? ` (${it.subKey === "espresso" ? "Espresso" : "Single Origin"})`
+                                    : it.grams
+                                    ? ` (${it.grams}g)`
+                                    : ""}{" "}
+                                  · Qty: {it.qty} · Price: {fmtMoney(it.price)} · Subtotal:{" "}
+                                  {fmtMoney((Number(it.qty) || 0) * (Number(it.price) || 0))}
+                                </li>
+                              ))}
+                            </ul>
+                          </div>
+                        )}
+                      </td>
+                      <td className="px-4 py-3 text-right font-extrabold text-[#dc2626]">
+                        MOP$ {fmtMoney(o.total)}
+                      </td>
+                      <td className="px-4 py-3 text-center">
+                        {o.voided ? (
+                          <span className="text-gray-400">—</span>
+                        ) : (
+                          <PosButton
+                            variant="black"
+                            onClick={() => askVoid(o)}
+                            title="Void this order"
+                          >
+                            Void
+                          </PosButton>
+                        )}
+                      </td>
+                    </tr>
+                  </React.Fragment>
+                );
+              })
+            )}
           </tbody>
         </table>
       </div>
