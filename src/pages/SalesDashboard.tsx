@@ -1,7 +1,8 @@
+// src/pages/SalesDashboard.tsx
 import React, { useMemo, useRef, useState } from "react";
 import { useAppState, type Category, type DrinkSubKey, type UIItem } from "../context/AppState";
 import PosButton from "../components/PosButton.jsx";
-import { upsertProduct, deleteProduct } from "../services/inventory";
+import { upsertProduct, deleteProduct, changeBeanPackSizeSafe } from "../services/inventory";
 
 import iconSimplePay from "../assets/payments/SimplePay.jpg";
 import iconCash from "../assets/payments/Cash.png";
@@ -44,6 +45,7 @@ export default function SalesDashboard() {
   const [cart, setCart] = useState<CartItem[]>([]);
   const [editMode, setEditMode] = useState(false);
   const [paymentMethod, setPaymentMethod] = useState("");
+  const [migratingSku, setMigratingSku] = useState<string | null>(null); // Beans 變更克數時避免重複操作
 
   const PAYMENT_OPTIONS = [
     { key: "SimplePay", label: "SimplePay", icon: iconSimplePay },
@@ -131,7 +133,7 @@ export default function SalesDashboard() {
     await reloadInventory();
   };
 
-  /** Beans：變更 price / name（grams 暫不允許直接改，以免改 SKU） */
+  /** Beans：變更 price / name（grams 透過安全流程改） */
   const saveBeanField = async (it: any, field: "price" | "name", raw: string) => {
     const value = field === "name" ? raw : parseFloat(raw) || 0;
     patchLocalItem("HandDrip", null, it.id, { [field]: value });
@@ -191,6 +193,33 @@ export default function SalesDashboard() {
 
     await reloadInventory();
     setNewProduct({ name: "", price: 0, usagePerCup: 0.02, grams: 250 });
+  };
+
+  /** Beans：下拉選擇新克數 → 安全變更（新 SKU、搬庫存、刪舊 SKU） */
+  const handleChangeBeanGramsSelect = async (item: any, newGrams: number) => {
+    const oldGrams = Number(item.grams) || 0;
+    if (!Number.isFinite(newGrams) || newGrams <= 0 || newGrams === oldGrams) return;
+
+    const ok = window.confirm(`將「${item.name}」由 ${oldGrams}g → ${newGrams}g？\n（會建立新 SKU、搬移庫存、刪舊 SKU）`);
+    if (!ok) return;
+
+    try {
+      setMigratingSku(item.id); // id 即 sku
+      const newSku = await changeBeanPackSizeSafe({
+        oldSku: item.id,
+        oldStockKg: Number(item.stock) || 0,
+        name: item.name,
+        price: Number(item.price) || 0,
+        newGrams,
+      });
+      await reloadInventory();
+      alert(`✅ 已變更為 ${newGrams}g（新 SKU：${newSku}）`);
+    } catch (e: any) {
+      console.error(e);
+      alert(e?.message || "變更克數失敗");
+    } finally {
+      setMigratingSku(null);
+    }
   };
 
   // ========= 購物車 / 下單 =========
@@ -387,8 +416,8 @@ export default function SalesDashboard() {
                   <tbody>
                     {(products as any[]).map((item: any) => (
                       <tr key={item.id} className="border-t border-gray-200">
+                        {/* 名稱 */}
                         <td className="px-3 py-2 font-semibold truncate" title={item.name}>
-                          {/* 可改名 */}
                           <input
                             type="text"
                             defaultValue={item.name}
@@ -401,7 +430,7 @@ export default function SalesDashboard() {
                           />
                         </td>
 
-                        {/* Price */}
+                        {/* 價格 */}
                         <td className="px-3 py-2 text-center">
                           <input
                             type="number"
@@ -429,14 +458,21 @@ export default function SalesDashboard() {
                               className={cellInputCls}
                             />
                           ) : (
-                            <input
-                              type="number"
-                              step="1"
+                            <select
                               value={item.grams || 0}
-                              readOnly
-                              title="為避免 SKU 被改動，Grams 暫不允許直接修改。如需變更克數，請新增新變體後刪除舊變體。"
-                              className={cellInputCls + " !bg-gray-50 !text-gray-500 cursor-not-allowed"}
-                            />
+                              disabled={migratingSku === item.id}
+                              onChange={(e) =>
+                                handleChangeBeanGramsSelect(item, parseInt(e.target.value, 10))
+                              }
+                              className={cellInputCls}
+                              title="選擇新的包裝克數（會建立新 SKU、搬移庫存、刪除舊 SKU）"
+                            >
+                              {[100, 250, 500, 1000].map((g) => (
+                                <option key={g} value={g}>
+                                  {g}g
+                                </option>
+                              ))}
+                            </select>
                           )}
                         </td>
 
@@ -447,6 +483,7 @@ export default function SalesDashboard() {
                             className="w-full sm:max-w-[110px] mx-auto h-11"
                             onClick={() => handleDelete(activeTab, activeTab === "drinks" ? drinkSubTab : null, item.id)}
                             title="Delete variant"
+                            disabled={migratingSku === item.id}
                           >
                             -
                           </PosButton>
@@ -523,7 +560,7 @@ export default function SalesDashboard() {
         {/* 右側訂單摘要 */}
         <div className="lg:col-span-7 min-w-0">
           <div className="bg-white shadow-xl rounded-xl p-4 border border-gray-200 h-full min-h-[420px] flex flex-col">
-            <h2 className="text-xl font-extrabold text-black mb-3">Order Summary</h2>
+            <h2 className="text-xl font-extrabold text黑 mb-3">Order Summary</h2>
 
             {cart.length === 0 ? (
               <p className="text-gray-400 text-center py-6 flex-1">No items added.</p>
@@ -535,7 +572,7 @@ export default function SalesDashboard() {
                     <col style={{ width: "20%" }} />
                     <col style={{ width: "20%" }} />
                   </colgroup>
-                  <thead className="bg-black text-white uppercase text-xs font-bold">
+                  <thead className="bg黑 text-white uppercase text-xs font-bold">
                     <tr>
                       <th className="px-4 py-3 text-left">Product</th>
                       <th className="px-4 py-3 text-center">Qty</th>
