@@ -237,36 +237,33 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
   );
 
   // ── 下單：送 RPC，完成後刷新 orders（DB 負責扣庫存） ───────────────
-  const createOrder = useCallback(
-    async (
-      cart: CartItem[] = [],
-      _totalFromUI?: number,
-      extra?: { paymentMethod?: string }
-    ) => {
-      if (!Array.isArray(cart) || cart.length === 0) return null;
+  const createOrder = useCallback(async (cart: CartItem[] = [], _t?: number, extra?: { paymentMethod?: string }) => {
+  if (!Array.isArray(cart) || cart.length === 0) return null;
 
-      // 注意：現在 UI item.id 就是 sku
-      const items: PlaceOrderItem[] = cart.map((it) => {
-        const isDrink = it.category === "drinks";
-        return {
-          name: it.name,
-          sku: String(it.id), // ⬅ 直接用 sku，不再自行拼接
-          qty: it.qty,
-          price: (it as any).price || 30,
-          category: isDrink ? "drinks" : "HandDrip",
-          sub_key: isDrink ? ((it as any).subKey as any) : undefined,
-          grams: isDrink ? undefined : Number((it as any).grams ?? 0) || undefined,
-        };
-      });
+  const items: PlaceOrderItem[] = cart.map((it) => {
+    const isDrink = it.category === "drinks";
+    return {
+      name: it.name,
+      sku: isDrink ? `${it.id}-${(it as any).subKey ?? ""}` : `${it.id}-${(it as any).grams ?? 0}g`,
+      qty: it.qty,
+      price: (it as any).price || 30,
+      category: isDrink ? "drinks" : "HandDrip",
+      sub_key: isDrink ? ((it as any).subKey as any) : undefined,
+      grams: isDrink ? undefined : Number((it as any).grams ?? 0) || undefined,
+    };
+  });
 
-      const id = await placeOrder(items, extra?.paymentMethod || "Cash", "ACTIVE");
-      await reloadOrders();
-      // 若希望下單後 UI 立即看到庫存變動，可等 Realtime；或手動：
-      // await reloadInventory();
-      return id;
-    },
-    [reloadOrders]
-  );
+  try {
+    const id = await placeOrder(items, extra?.paymentMethod || "Cash", "ACTIVE");
+    await reloadOrders();
+    return id;
+  } catch (e: any) {
+    console.error("[createOrder] failed:", e);
+    alert(e?.message ?? "Create order failed");
+    return null;
+  }
+}, [reloadOrders]);
+
 
   // ── 作廢：RPC（可選回補），完成後刷新 ───────────────────────────────
   const voidOrder = useCallback(

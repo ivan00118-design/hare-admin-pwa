@@ -200,15 +200,18 @@ export async function placeOrder(
   const { data, error } = await supabase.rpc("place_order", {
     p_payment_method: paymentMethod,
     p_items: items,
-    p_total: itemsTotal,                        // 商品合計
+    p_total: itemsTotal,
     p_status: opts.status ?? status,
-    p_channel: opts.channel ?? "IN_STORE",      // IN_STORE / DELIVERY
+    p_channel: opts.channel ?? "IN_STORE",
     p_delivery_fee: opts.deliveryFee ?? 0,
     p_delivery_info: opts.deliveryInfo ?? {},
+    // ⬇⬇⬇ 這一行用來打破函式重載的歧義（只有新版函式有這個參數）
+    p_fail_when_insufficient: false,
   });
   if (error) throw error;
-  return data as string; // order id
+  return data as string;
 }
+
 
 // 小幫手：Delivery 包裝（讓頁面可以 import { placeDelivery }）
 export async function placeDelivery(
