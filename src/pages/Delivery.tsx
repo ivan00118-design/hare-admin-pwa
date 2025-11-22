@@ -117,7 +117,6 @@ export default function Delivery() {
   /** 只取 beans（HandDrip） */
   const products: any[] = inventory?.store?.HandDrip || [];
 
-  /** Beans：依「同名」彙整各包裝並依克數排序 */
   const beanGroups = useMemo(() => {
     const map = new Map<string, any[]>();
     for (const it of products) {
