@@ -67,9 +67,9 @@ export type ShippingRow = {
   delivery_json: any; ship_status: ShipStatus | null; customer_name: string | null; items_count: number;
 };
 
-export async function listShipping(status: ShipStatus, limit = 200) {
+export async function listShipping(status: "PENDING" | "CLOSED", limit = 200) {
   const { data, error } = await supabase
-    .from("v_shipping_list_compat")
+    .from("v_shipping_list") // ← 換成新檢視
     .select("*")
     .eq("ship_status", status)
     .order("created_at", { ascending: false })
