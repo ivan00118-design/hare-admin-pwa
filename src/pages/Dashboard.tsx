@@ -56,16 +56,16 @@ export default function Dashboard() {
   );
 
   // 更健壯的 Delivery 判斷
-  const isDeliveryOrder = (o: any) => {
-    if (typeof o?.isDelivery === "boolean") return o.isDelivery;
-    if (o?.channel) return o.channel === "DELIVERY";
-    // 後援：delivery JSON 有內容就視為 Delivery
-    const d = o?.delivery;
-    if (d && typeof d === "object" && Object.keys(d).length > 0) return true;
-    // 後援：有 deliveryFee 也可能是 Delivery（雖非必要，用作最後一層猜測）
-    if (o?.deliveryFee != null && Number(o.deliveryFee) > 0) return true;
-    return false;
-  };
+  const isDeliveryOrder = (o: any) =>
+  typeof o?.isDelivery === "boolean"
+    ? o.isDelivery
+    : (o?.channel === "DELIVERY")
+      ? true
+      : !!(
+          (o?.delivery && Object.keys(o.delivery || {}).length > 0) ||
+          (o?.deliveryInfo && Object.keys(o.deliveryInfo || {}).length > 0) ||
+          (Number(o?.delivery_fee ?? o?.deliveryFee) || 0) > 0
+        );
 
   // 拆分營收 + 計數
   const byType = useMemo(() => {
