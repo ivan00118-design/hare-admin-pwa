@@ -1,5 +1,5 @@
 // src/pages/SalesDashboard.tsx
-import React, { useCallback, useMemo, useRef, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useAppState, type Category, type DrinkSubKey, type UIItem } from "../context/AppState";
 import PosButton from "../components/PosButton.jsx";
 import {
@@ -56,6 +56,11 @@ export default function SalesDashboard() {
       console.error("[refreshInventory] failed:", e);
     }
   }, [setInventory]);
+
+  // 首次載入：用 DB 視圖對齊
+  useEffect(() => {
+    refreshInventory();
+  }, [refreshInventory]);
 
   const [activeTab, setActiveTab] = useState<Category>("drinks");
   const [drinkSubTab, setDrinkSubTab] = useState<DrinkSubKey>("espresso");
