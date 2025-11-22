@@ -2,15 +2,7 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { useAppState, type UIItem } from "../context/AppState";
 import PosButton from "../components/PosButton.jsx";
-import {
-  placeDelivery,
-  listShipping,
-  setOrderShipStatus,
-  type PlaceOrderItem,
-  type DeliveryInfo,
-  type ShippingRow,
-  type ShipStatus,
-} from "../services/orders";
+import { placeDelivery, type PlaceOrderItem, type DeliveryInfo } from "../services/orders";
 
 import iconSimplePay from "../assets/payments/SimplePay.jpg";
 import iconCash from "../assets/payments/Cash.png";
@@ -20,66 +12,54 @@ import {
   loadDeliveryShortcuts,
   saveDeliveryShortcuts,
   newId,
-  type DeliveryShortcut, // 你現有的型別可能是 { id, label, fee, ... }
+  type DeliveryShortcut,
 } from "../services/deliveryShortcuts";
+
+// （若你在本檔有出貨清單功能，保留；若沒有可移除這段匯入）
+// import {
+//   loadDeliveryShipments,
+//   saveDeliveryShipments,
+//   type DeliveryShipment,
+// } from "../services/deliveryShipments";
 
 /** ====== 型別 ====== */
 type TabKey = "HandDrip" | "delivery";
-
-type BeanCartItem = UIItem & {
-  category: "HandDrip";
-  subKey?: null;
-  grams: number;
-  qty: number;
-};
+type BeanCartItem = UIItem & { category: "HandDrip"; subKey?: null; grams: number; qty: number; };
 type CartItem = BeanCartItem;
 
-/** 與現有 DeliveryShortcut 作相容的本地寬鬆型別（同時支援 name 與 label） */
-type DeliveryShortcutCompat = DeliveryShortcut & {
-  name?: string;
-  label?: string; // 舊欄位
-  note?: string | null;
-  fee?: number;
-  defaultPayment?: "SimplePay" | "Cash" | "MacauPass" | null;
+/**
+ * 讓頁面同時相容兩種快捷鍵欄位命名：
+ * - UI 常用：name, defaultPayment
+ * - DB/舊版：label, default_payment
+ */
+type ShortcutLike = DeliveryShortcut & {
+  label?: string;
+  default_payment?: "SimplePay" | "Cash" | "MacauPass" | null;
 };
 
-/** ====== 小工具 ====== */
+const getSCName = (s: ShortcutLike) => (s as any).name ?? (s as any).label ?? "";
+const getSCNote = (s: ShortcutLike) => (s as any).note ?? "";
+const getSCPayment = (s: ShortcutLike) =>
+  (s as any).defaultPayment ?? (s as any).default_payment ?? null;
+
 const fmt = (n: number) => {
   const r = Math.round((Number(n) + Number.EPSILON) * 100) / 100;
   return Number.isInteger(r) ? String(r) : r.toFixed(2).replace(/0+$/, "").replace(/\.$/, "");
 };
 const fmtTime = (iso?: string | null) => {
-  try {
-    if (!iso) return "";
-    return new Date(iso).toLocaleString();
-  } catch {
-    return iso || "";
-  }
+  try { if (!iso) return ""; return new Date(iso).toLocaleString(); } catch { return iso || ""; }
 };
-
-/** 讓 Shortcut 同時相容 name/label、note、fee、defaultPayment 的讀取 */
-const scGetName = (s: DeliveryShortcutCompat) =>
-  (typeof s.name === "string" ? s.name : (s as any).label) ?? "";
-const scGetNote = (s: DeliveryShortcutCompat) =>
-  (typeof s.note === "string" ? s.note : (s as any).desc) ?? "";
-const scGetFee = (s: DeliveryShortcutCompat) => {
-  const v = (s as any).fee ?? (s as any).price ?? (s as any).feeMOP ?? 0;
-  const n = Number(v);
-  return Number.isFinite(n) ? n : 0;
-};
-const scGetDefaultPayment = (s: DeliveryShortcutCompat) =>
-  (s.defaultPayment ?? (s as any).payment ?? null) as "SimplePay" | "Cash" | "MacauPass" | null;
 
 export default function Delivery() {
   const { inventory } = useAppState();
 
-  /** 只留下 Coffee Beans 與 Delivery 兩個分頁 */
+  // 只留下 Coffee Beans 與 Delivery 兩個分頁
   const [activeTab, setActiveTab] = useState<TabKey>("HandDrip");
   const [cart, setCart] = useState<CartItem[]>([]);
   const [paymentMethod, setPaymentMethod] = useState("");
   const [saving, setSaving] = useState(false);
 
-  // 收件資料（移除 phone / address；ship_status 在送單時一律填 PENDING）
+  // 收件資料（phone / address 已移除）
   const [delivery, setDelivery] = useState<DeliveryInfo>({
     customer_name: "",
     note: "",
@@ -87,24 +67,23 @@ export default function Delivery() {
   });
   const [deliveryFee, setDeliveryFee] = useState<number>(0);
 
-  // Delivery Shortcuts（可編輯；相容 label/name）
+  // Delivery Shortcuts（可編輯）— 完全 DB 化：load/save 直連 DB
   const [scLoading, setScLoading] = useState(true);
   const [scEdit, setScEdit] = useState(false);
   const [scSaving, setScSaving] = useState(false);
-  const [shortcuts, setShortcuts] = useState<DeliveryShortcutCompat[]>([]);
+  const [shortcuts, setShortcuts] = useState<ShortcutLike[]>([]);
 
-  // 出貨清單（完全 DB 化）
-  const [shipLoading, setShipLoading] = useState(true);
-  const [shipments, setShipments] = useState<ShippingRow[]>([]);
-  const [shipTab, setShipTab] = useState<"pending" | "closed">("pending");
+  // （若你在本檔有出貨清單功能，保留以下三行；否則可移除）
+  // const [shipLoading, setShipLoading] = useState(true);
+  // const [shipments, setShipments] = useState<DeliveryShipment[]>([]);
+  // const [shipTab, setShipTab] = useState<"pending" | "closed">("pending");
 
-  /** ====== 初始化：載入 Shortcuts ====== */
   useEffect(() => {
     (async () => {
       try {
         const list = await loadDeliveryShortcuts();
-        // 直接當作相容型別使用
-        setShortcuts(Array.isArray(list) ? (list as DeliveryShortcutCompat[]) : []);
+        // 以相容形狀放進狀態
+        setShortcuts(((list ?? []) as any[]).map(s => ({ ...s })));
       } catch (e) {
         console.error("[loadDeliveryShortcuts] failed:", e);
       } finally {
@@ -113,71 +92,86 @@ export default function Delivery() {
     })();
   }, []);
 
-  /** ====== Shipping List：依分頁（pending/closed）查 DB ====== */
-  const reloadShipping = async (tab: "pending" | "closed" = shipTab) => {
-    setShipLoading(true);
-    try {
-      const status: ShipStatus = tab === "pending" ? "PENDING" : "CLOSED";
-      const rows = await listShipping(status, 200);
-      setShipments(rows);
-    } catch (e) {
-      console.error("[listShipping] failed:", e);
-      setShipments([]);
-    } finally {
-      setShipLoading(false);
-    }
-  };
-  useEffect(() => { reloadShipping("pending"); /* 初始顯示 PENDING */ }, []);
-  useEffect(() => { reloadShipping(shipTab); }, [shipTab]); // 切換分頁即重新查詢
+  // 若你有 Shipping List，就保留；否則可刪掉整段 effect 與後續 UI
+  // useEffect(() => {
+  //   (async () => {
+  //     try {
+  //       const list = await loadDeliveryShipments();
+  //       setShipments(Array.isArray(list) ? list : []);
+  //     } catch (e) {
+  //       console.error("[loadDeliveryShipments] failed:", e);
+  //     } finally {
+  //       setShipLoading(false);
+  //     }
+  //   })();
+  // }, []);
 
-  /** 使用 Shortcut：寫回收件人、note、fee、預設付款 */
-  const onUseShortcut = (s: DeliveryShortcutCompat) => {
+  // 套用快捷：name / note / defaultPayment / fee
+  const onUseShortcut = (s: ShortcutLike) => {
     setDelivery((d) => ({
       ...d,
-      customer_name: scGetName(s) || d.customer_name || "",
-      note: scGetNote(s) || d.note || "",
+      customer_name: getSCName(s),
+      note: getSCNote(s),
     }));
-    setDeliveryFee(Number(scGetFee(s) || 0));
-    const pay = scGetDefaultPayment(s);
+    setDeliveryFee(Number((s as any).fee || 0));
+    const pay = getSCPayment(s);
     if (pay) setPaymentMethod(pay);
   };
 
-  /** Shortcut 編輯：新增/刪除/修改/儲存/取消（相容 label/name） */
+  // 編輯：新增/刪除/更新（全部在前端狀態，按 Save 再整包寫回 DB）
   const onAddShortcut = () => {
     setShortcuts((prev) => [
       ...prev,
-      // 為了型別相容，新增時先用 label 存顯示名稱
-      { id: newId(), label: "", fee: 0, note: "", defaultPayment: null } as any,
+      // 同時放入 name 與 label，避免無論 service 的型別是哪一種都可用
+      { id: newId(), name: "", label: "", fee: 0, note: "", defaultPayment: null, default_payment: null } as any,
     ]);
   };
   const onRemoveShortcut = (id: string) => {
     if (!window.confirm("確定要刪除此快捷嗎？")) return;
     setShortcuts((prev) => prev.filter((x) => x.id !== id));
   };
-  const onPatchShortcut = (id: string, patch: Record<string, any>) => {
-    // 直接用寬鬆 patch，避免 TS 因為 'name' 不在 DeliveryShortcut 報錯
-    setShortcuts((prev) => prev.map((x) => (x.id === id ? ({ ...x, ...patch } as any) : x)));
+  /** 單字段 patch（雙制式同步） */
+  const onPatchShortcut = (id: string, field: "name" | "note" | "fee" | "defaultPayment", value: any) => {
+    setShortcuts((prev) =>
+      prev.map((x) => {
+        if (x.id !== id) return x;
+        const next: any = { ...x };
+        if (field === "name") {
+          next.name = value;
+          next.label = value; // 同步 DB 欄位命名
+        } else if (field === "defaultPayment") {
+          next.defaultPayment = value || null;
+          next.default_payment = value || null; // 同步 DB 欄位命名
+        } else if (field === "fee") {
+          next.fee = parseInt(String(value || "0"), 10) || 0;
+        } else if (field === "note") {
+          next.note = value ?? "";
+        }
+        return next;
+      })
+    );
   };
+  /** 儲存到 DB（完全同步：upsert 目前清單 + 刪除 DB 多餘） */
   const onSaveShortcuts = async () => {
     setScSaving(true);
     try {
-      // 清洗：統一輸出成 service 需要的欄位（以 label 優先；無 label 則寫 name）
       const cleaned = shortcuts
-        .map((s) => {
-          const label = scGetName(s).trim();
-          if (!label) return null;
-          return {
-            id: String(s.id),
-            label, // 以 label 為主（相容你的 service）
-            fee: scGetFee(s),
-            note: scGetNote(s) || "",
-            defaultPayment: scGetDefaultPayment(s) ?? null,
-          };
-        })
-        .filter(Boolean) as DeliveryShortcut[];
+        .map((s) => ({
+          id: s.id,
+          // 同時帶 name 與 label，service 端不論使用哪種型別都可處理
+          name: getSCName(s).trim(),
+          label: getSCName(s).trim(),
+          fee: Number((s as any).fee || 0),
+          note: getSCNote(s),
+          defaultPayment: getSCPayment(s),
+          default_payment: getSCPayment(s),
+        }))
+        .filter((s) => s.name.length > 0);
 
-      await saveDeliveryShortcuts(cleaned);
-      setShortcuts(cleaned as any); // 儲存後以同結構回填
+      // service 可能是 name 型也可能是 label 型，這裡用 any 交給 service 映射
+      await saveDeliveryShortcuts(cleaned as any);
+      // 以 cleaned 回刷狀態（保留雙制式鍵值）
+      setShortcuts(cleaned as any);
       setScEdit(false);
     } catch (e: any) {
       console.error(e);
@@ -190,7 +184,7 @@ export default function Delivery() {
     setScLoading(true);
     try {
       const list = await loadDeliveryShortcuts();
-      setShortcuts(Array.isArray(list) ? (list as any) : []);
+      setShortcuts(((list ?? []) as any[]).map(s => ({ ...s })));
     } catch (e) {
       console.error(e);
     } finally {
@@ -208,7 +202,7 @@ export default function Delivery() {
   /** 只取 beans（HandDrip） */
   const products: any[] = inventory?.store?.HandDrip || [];
 
-  /** Beans：依「同名」彙整各包裝（100/250/500/1000g）並依克數排序 */
+  /** Beans：依「同名」彙整各包裝並依克數排序 */
   const beanGroups = useMemo(() => {
     const map = new Map<string, any[]>();
     for (const it of products) {
@@ -218,9 +212,8 @@ export default function Delivery() {
     }
     return Array.from(map.entries()).map(([name, variants]) => [
       name,
-      (variants as any[])
-        .filter((v) => Number.isFinite(Number((v as any).grams)))
-        .sort((a: any, b: any) => (a.grams || 0) - (b.grams || 0)),
+      (variants as any[]).filter(v => Number.isFinite(Number((v as any).grams)))
+                         .sort((a: any, b: any) => (a.grams || 0) - (b.grams || 0)),
     ]) as Array<[string, any[]]>;
   }, [products]);
 
@@ -232,9 +225,7 @@ export default function Delivery() {
 
     setCart((prev: CartItem[]) => {
       const key = `HandDrip||${item.id}|${g}`;
-      const existed = prev.find(
-        (p) => `HandDrip||${p.id}|${(p as any).grams || 0}` === key
-      );
+      const existed = prev.find(p => `HandDrip||${p.id}|${(p as any).grams || 0}` === key);
       if (existed) {
         return prev.map((p: CartItem) =>
           `HandDrip||${p.id}|${(p as any).grams || 0}` === key
@@ -271,7 +262,7 @@ export default function Delivery() {
   const itemsTotal = cart.reduce((s, i) => s + i.qty * (i.price || 30), 0);
   const grandTotal = itemsTotal + (Number(deliveryFee) || 0);
 
-  /** 下單（delivery_info.ship_status 一律 PENDING） */
+  /** 下單 */
   const handleConfirmDelivery = async () => {
     if (!paymentMethod) return alert("請先選擇支付方式");
     if (cart.length === 0) return alert("請先加入商品");
@@ -294,18 +285,12 @@ export default function Delivery() {
           customer_name: delivery.customer_name ?? "",
           note: delivery.note ?? "",
           scheduled_at: delivery.scheduled_at ?? null,
-          ship_status: "PENDING", // 🔴 重要：讓 Shipping List 能即時顯示
         },
         Number(deliveryFee) || 0,
         "ACTIVE"
       );
 
       alert(`✅ Delivery Created（#${id}）`);
-
-      // 重載 Shipping List（停留在目前分頁）
-      await reloadShipping(shipTab);
-
-      // 清空表單
       setCart([]);
       setPaymentMethod("");
       setDelivery({ customer_name: "", note: "", scheduled_at: null });
@@ -318,38 +303,20 @@ export default function Delivery() {
     }
   };
 
-  /** Shipping List 操作（關閉 / 重開） */
-  const closeShipment = async (orderId: string) => {
-    await setOrderShipStatus(orderId, "CLOSED");
-    await reloadShipping(shipTab);
-  };
-  const reopenShipment = async (orderId: string) => {
-    await setOrderShipStatus(orderId, "PENDING");
-    await reloadShipping(shipTab);
-  };
-
   return (
     <div className="p-6 bg-gray-50 min-h-screen" style={{ colorScheme: "light" }}>
       {/* Tabs：只留 Coffee Beans + Delivery */}
       <div className="flex gap-3 mb-6">
-        <PosButton
-          variant="tab"
-          selected={activeTab === "HandDrip"}
-          onClick={() => setActiveTab("HandDrip")}
-        >
+        <PosButton variant="tab" selected={activeTab === "HandDrip"} onClick={() => setActiveTab("HandDrip")}>
           Coffee Beans
         </PosButton>
-        <PosButton
-          variant="tab"
-          selected={activeTab === "delivery"}
-          onClick={() => setActiveTab("delivery")}
-        >
+        <PosButton variant="tab" selected={activeTab === "delivery"} onClick={() => setActiveTab("delivery")}>
           Delivery
         </PosButton>
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
-        {/* 左側：商品清單 / Delivery Shortcuts（可編輯；已移除 Fee Presets 區塊） */}
+        {/* 左側：商品清單 / Delivery Shortcuts（可編輯；已移除 Fee Presets） */}
         <div className="lg:col-span-5 min-w-0">
           <div className="bg-white shadow-xl rounded-xl p-4 border border-gray-200 h-full min-h-[420px] flex flex-col">
             <div className="flex items-center justify-between mb-3">
@@ -438,7 +405,7 @@ export default function Delivery() {
                 </table>
               </div>
             ) : (
-              // Delivery 分頁：快捷鍵（可編輯；Fee Presets 已移除）
+              // Delivery 分頁：快捷鍵（可編輯；不再顯示 Fee Presets）
               <div className="rounded-lg border border-gray-200 p-4 flex-1">
                 {scLoading ? (
                   <div className="text-gray-500 text-sm">Loading…</div>
@@ -450,26 +417,21 @@ export default function Delivery() {
                       </div>
                     ) : (
                       <div className="flex flex-wrap gap-2">
-                        {shortcuts.map((s) => {
-                          const n = scGetName(s);
-                          const fee = scGetFee(s);
-                          const pay = scGetDefaultPayment(s);
-                          return (
-                            <PosButton
-                              key={s.id}
-                              variant="red"
-                              className="px-3 py-2"
-                              onClick={() => onUseShortcut(s)}
-                              title={`Set recipient=${n} · fee=${fee}${pay ? " · pay=" + pay : ""}`}
-                            >
-                              {n || "(No name)"}
-                              <span className="ml-2 text-xs opacity-70">MOP$ {fmt(fee)}</span>
-                              {pay ? (
-                                <span className="ml-1 text-[10px] opacity-60">[{pay}]</span>
-                              ) : null}
-                            </PosButton>
-                          );
-                        })}
+                        {shortcuts.map((s) => (
+                          <PosButton
+                            key={s.id}
+                            variant="red"
+                            className="px-3 py-2"
+                            onClick={() => onUseShortcut(s)}
+                            title={`Set recipient=${getSCName(s)} · fee=${(s as any).fee}${getSCPayment(s) ? " · pay="+getSCPayment(s) : ""}`}
+                          >
+                            {getSCName(s)}
+                            <span className="ml-2 text-xs opacity-70">MOP$ {fmt((s as any).fee || 0)}</span>
+                            {getSCPayment(s) ? (
+                              <span className="ml-1 text-[10px] opacity-60">[{getSCPayment(s)}]</span>
+                            ) : null}
+                          </PosButton>
+                        ))}
                       </div>
                     )}
                   </>
@@ -492,18 +454,16 @@ export default function Delivery() {
                               <input
                                 className="h-9 w-full border rounded px-2"
                                 placeholder="Recipient name"
-                                value={scGetName(s)}
-                                onChange={(e) =>
-                                  onPatchShortcut(s.id, { name: e.target.value, label: e.target.value })
-                                }
+                                value={getSCName(s)}
+                                onChange={(e) => onPatchShortcut(s.id, "name", e.target.value)}
                               />
                             </td>
                             <td className="py-1 pr-2">
                               <input
                                 className="h-9 w-full border rounded px-2"
                                 placeholder="Note (optional)"
-                                value={scGetNote(s)}
-                                onChange={(e) => onPatchShortcut(s.id, { note: e.target.value })}
+                                value={getSCNote(s)}
+                                onChange={(e) => onPatchShortcut(s.id, "note", e.target.value)}
                               />
                             </td>
                             <td className="py-1 pr-2">
@@ -512,21 +472,15 @@ export default function Delivery() {
                                 type="number"
                                 step="1"
                                 min="0"
-                                value={scGetFee(s)}
-                                onChange={(e) =>
-                                  onPatchShortcut(s.id, { fee: parseInt(e.target.value || "0", 10) })
-                                }
+                                value={Number.isFinite(Number((s as any).fee)) ? (s as any).fee : 0}
+                                onChange={(e) => onPatchShortcut(s.id, "fee", parseInt(e.target.value || "0", 10))}
                               />
                             </td>
                             <td className="py-1 pr-2">
                               <select
                                 className="h-9 border rounded px-2"
-                                value={scGetDefaultPayment(s) ?? ""}
-                                onChange={(e) =>
-                                  onPatchShortcut(s.id, {
-                                    defaultPayment: (e.target.value || "") as any || null,
-                                  })
-                                }
+                                value={getSCPayment(s) ?? ""}
+                                onChange={(e) => onPatchShortcut(s.id, "defaultPayment", (e.target.value || "") || null)}
                               >
                                 <option value="">—</option>
                                 <option value="SimplePay">SimplePay</option>
@@ -535,11 +489,7 @@ export default function Delivery() {
                               </select>
                             </td>
                             <td className="py-1">
-                              <PosButton
-                                variant="black"
-                                className="px-3 py-1"
-                                onClick={() => onRemoveShortcut(s.id)}
-                              >
+                              <PosButton variant="black" className="px-3 py-1" onClick={() => onRemoveShortcut(s.id)}>
                                 Delete
                               </PosButton>
                             </td>
@@ -563,7 +513,7 @@ export default function Delivery() {
         {/* 右側：外送資料 + 結帳 */}
         <div className="lg:col-span-7 min-w-0">
           <div className="bg-white shadow-xl rounded-xl p-4 border border-gray-200 h-full min-h-[420px] flex flex-col gap-4">
-            {/* 收件資訊（phone / address 已移除） */}
+            {/* 收件資訊 */}
             <div className="rounded-lg border border-gray-200 p-4">
               <h3 className="text-lg font-extrabold mb-3">Recipient</h3>
               <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
@@ -583,9 +533,7 @@ export default function Delivery() {
                   className="h-10 border rounded px-3"
                   type="datetime-local"
                   value={delivery.scheduled_at ?? ""}
-                  onChange={(e) =>
-                    setDelivery((d) => ({ ...d, scheduled_at: e.target.value || null }))
-                  }
+                  onChange={(e) => setDelivery((d) => ({ ...d, scheduled_at: e.target.value || null }))}
                 />
                 <div className="flex items-center gap-2">
                   <label className="text-sm text-gray-600">Delivery Fee</label>
@@ -632,21 +580,11 @@ export default function Delivery() {
                           </td>
                           <td className="px-4 py-3 text-center">
                             <div className="inline-flex items-center gap-2 justify-center">
-                              <PosButton
-                                variant="black"
-                                className="px-2 py-1 text-xs"
-                                onClick={() => changeCartQty(key, -1)}
-                              >
+                              <PosButton variant="black" className="px-2 py-1 text-xs" onClick={() => changeCartQty(key, -1)}>
                                 −
                               </PosButton>
-                              <span className="inline-block min-w-[2rem] text-center">
-                                {item.qty}
-                              </span>
-                              <PosButton
-                                variant="black"
-                                className="px-2 py-1 text-xs"
-                                onClick={() => changeCartQty(key, +1)}
-                              >
+                              <span className="inline-block min-w-[2rem] text-center">{item.qty}</span>
+                              <PosButton variant="black" className="px-2 py-1 text-xs" onClick={() => changeCartQty(key, +1)}>
                                 ＋
                               </PosButton>
                             </div>
@@ -678,16 +616,10 @@ export default function Delivery() {
                         className={[
                           "h-12 w-24 rounded-lg bg-white border flex items-center justify-center",
                           "shadow-sm focus:outline-none focus-visible:ring-2 focus-visible:ring-red-500",
-                          selected
-                            ? "border-red-500 ring-2 ring-red-500"
-                            : "border-neutral-300 hover:border-neutral-400",
+                          selected ? "border-red-500 ring-2 ring-red-500" : "border-neutral-300 hover:border-neutral-400",
                         ].join(" ")}
                       >
-                        <img
-                          src={opt.icon}
-                          alt={opt.label}
-                          className="h-6 object-contain pointer-events-none"
-                        />
+                        <img src={opt.icon} alt={opt.label} className="h-6 object-contain pointer-events-none" />
                         <span className="sr-only">{opt.label}</span>
                       </button>
                     );
@@ -700,9 +632,7 @@ export default function Delivery() {
                   Items: <b>$ {fmt(itemsTotal)}</b>
                   <span className="mx-2">+</span> Delivery Fee: <b>$ {fmt(deliveryFee)}</b>
                   <span className="mx-2">=</span> Total:{" "}
-                  <span className="text-[#dc2626] font-extrabold text-lg">
-                    $ {fmt(grandTotal)}
-                  </span>
+                  <span className="text-[#dc2626] font-extrabold text-lg">$ {fmt(grandTotal)}</span>
                 </div>
                 <PosButton
                   variant="confirm"
@@ -718,109 +648,8 @@ export default function Delivery() {
         </div>
       </div>
 
-      {/* 出貨清單（完全 DB 化） */}
-      <div className="mt-6 bg-white border border-gray-200 rounded-xl shadow p-4">
-        <div className="flex items-center justify-between mb-3">
-          <h2 className="text-xl font-extrabold">Shipping List</h2>
-          <div className="flex gap-2">
-            <PosButton
-              variant="tab"
-              selected={shipTab === "pending"}
-              onClick={() => setShipTab("pending")}
-            >
-              Pending
-            </PosButton>
-            <PosButton
-              variant="tab"
-              selected={shipTab === "closed"}
-              onClick={() => setShipTab("closed")}
-            >
-              Closed
-            </PosButton>
-          </div>
-        </div>
-
-        <div className="rounded-lg border border-gray-200 overflow-x-auto">
-          <table className="w-full text-sm text-gray-900">
-            <thead className="bg-black text-white uppercase text-xs font-bold">
-              <tr>
-                <th className="px-4 py-3 text-left">Date</th>
-                <th className="px-4 py-3 text-left">Order</th>
-                <th className="px-4 py-3 text-left">Recipient</th>
-                <th className="px-4 py-3 text-right">Total</th>
-                <th className="px-4 py-3 text-center">Status</th>
-                <th className="px-4 py-3 text-center">Action</th>
-              </tr>
-            </thead>
-            <tbody>
-              {shipLoading ? (
-                <tr>
-                  <td className="px-4 py-6 text-center text-gray-400" colSpan={6}>
-                    Loading…
-                  </td>
-                </tr>
-              ) : shipments.length === 0 ? (
-                <tr>
-                  <td className="px-4 py-6 text-center text-gray-400" colSpan={6}>
-                    No records.
-                  </td>
-                </tr>
-              ) : (
-                shipments.map((s) => {
-                  const shortId = (s.id || "").slice(-6);
-                  const isPending = (s.ship_status ?? "PENDING") === "PENDING";
-                  return (
-                    <tr key={s.id} className="border-t">
-                      <td className="px-4 py-3">{fmtTime(s.created_at)}</td>
-                      <td className="px-4 py-3 font-mono">{shortId}</td>
-                      <td className="px-4 py-3">
-                        {s.customer_name || <span className="text-gray-400">—</span>}
-                      </td>
-                      <td className="px-4 py-3 text-right font-extrabold text-[#dc2626]">
-                        MOP$ {fmt(s.total)}
-                      </td>
-                      <td className="px-4 py-3 text-center">
-                        {isPending ? (
-                          <span className="inline-block text-[11px] px-2 py-[2px] rounded bg-amber-100 text-amber-700">
-                            PENDING
-                          </span>
-                        ) : (
-                          <span className="inline-block text-[11px] px-2 py-[2px] rounded bg-emerald-100 text-emerald-700">
-                            CLOSED
-                          </span>
-                        )}
-                      </td>
-                      <td className="px-4 py-3 text-center">
-                        {isPending ? (
-                          <div className="inline-flex gap-2">
-                            <PosButton
-                              variant="red"
-                              className="px-3 py-1"
-                              onClick={() => closeShipment(s.id)}
-                            >
-                              Close
-                            </PosButton>
-                          </div>
-                        ) : (
-                          <div className="inline-flex gap-2">
-                            <PosButton
-                              variant="black"
-                              className="px-3 py-1"
-                              onClick={() => reopenShipment(s.id)}
-                            >
-                              Reopen
-                            </PosButton>
-                          </div>
-                        )}
-                      </td>
-                    </tr>
-                  );
-                })
-              )}
-            </tbody>
-          </table>
-        </div>
-      </div>
+      {/* 若你有 Shipping List 的 UI，保留下方區塊；否則可以刪除 */}
+      {/* <div className="mt-6 bg-white border border-gray-200 rounded-xl shadow p-4"> ... </div> */}
     </div>
   );
 }
