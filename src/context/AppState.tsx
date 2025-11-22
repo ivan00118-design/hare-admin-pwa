@@ -4,6 +4,7 @@ import React, {
   useCallback,
   useEffect,
   useMemo,
+  useRef,
   useState,
   useContext,
 } from "react";
@@ -16,10 +17,10 @@ import {
   type PlaceOrderItem,
 } from "../services/orders";
 
-// DB 版 inventory 服務
 import {
   fetchInventoryRows,
   rowsToUIInventory,
+  type UIInventory as DBUIInventory,
 } from "../services/inventory";
 
 // ====== 型別 ======
@@ -27,20 +28,20 @@ export type Category = "drinks" | "HandDrip";
 export type DrinkSubKey = "espresso" | "singleOrigin";
 
 export type DrinkProduct = {
-  id: string;            // ⚠ 現在以 sku 作為 id
+  id: string;
   name: string;
   price: number;
-  usagePerCup: number;   // 每杯扣的公斤數
-  stock: number;         // 庫存公斤數
+  usagePerCup: number; // 每杯扣的公斤數
+  stock: number;       // 庫存公斤數
   unit: "kg";
 };
 
 export type BeanProduct = {
-  id: string;            // ⚠ 現在以 sku 作為 id
+  id: string;
   name: string;
   price: number;
-  grams: number;         // 包裝克數：100 / 250 / 500 / 1000
-  stock: number;         // 庫存公斤數（總量，以 kg）
+  grams: number;       // 包裝克數：100 / 250 / 500 / 1000
+  stock: number;       // 庫存公斤數（總量，以 kg）
   unit: "kg";
 };
 
@@ -83,7 +84,6 @@ export type Order = {
   voided?: boolean;
   voidedAt?: string | null;
   voidReason?: string | null;
-  // 來自 DB 的欄位（Dashboard 會用到）
   isDelivery?: boolean;
   delivery?: any;
   deliveryFee?: number;
@@ -97,6 +97,7 @@ type Ctx = {
   setInventory: (
     updater: Inventory | ((prev: Inventory) => Inventory)
   ) => Promise<void>;
+  reloadInventory: () => Promise<void>;
   createOrder: (
     cart: CartItem[],
     totalFromUI?: number,
@@ -106,9 +107,7 @@ type Ctx = {
     orderId: string,
     opt?: { restock?: boolean; reason?: string }
   ) => Promise<void>;
-  repairInventory: () => Promise<void>;
-  reloadOrders: () => Promise<void>;
-  reloadInventory: () => Promise<void>;
+  repairInventory: () => Promise<void>; // 現在僅做去重 & 本地校正
 };
 
 const AppStateContext = createContext<Ctx | null>(null);
@@ -119,28 +118,90 @@ export const useAppState = () => {
 };
 
 // ====== 小工具 ======
-async function getOrgIdForCurrentUser(): Promise<string> {
-  const { data: auth } = await supabase.auth.getUser();
-  const uid = auth.user?.id;
-  if (!uid) throw new Error("Not authenticated");
-  const { data, error } = await supabase
-    .from("employees")
-    .select("org_id")
-    .eq("user_id", uid)
-    .limit(1)
-    .maybeSingle();
-  if (error) throw error;
-  if (!data?.org_id) throw new Error("No organization bound to this user");
-  return data.org_id as string;
+function deepClone<T>(v: T): T {
+  return typeof structuredClone === "function"
+    ? structuredClone(v)
+    : JSON.parse(JSON.stringify(v));
 }
 
+// 把 Drinks 的 grams 視為 0；HandDrip 用實際 grams，供「去重」用
+function keyOf(
+  category: Category,
+  subKey: DrinkSubKey | null,
+  p: Partial<UIItem>
+) {
+  const name = (p?.name || "").trim().toLowerCase();
+  const grams = category === "drinks" ? 0 : Number(p?.grams || 0);
+  return `${category}|${subKey || ""}|${name}|${grams}`;
+}
+
+function dedupeInventory(inv: Inventory): Inventory {
+  const next = deepClone(inv);
+  const pick = new Map<string, any>();
+
+  // Drinks
+  (["espresso", "singleOrigin"] as DrinkSubKey[]).forEach((k) => {
+    const list = next.store.drinks[k] || [];
+    const arr: DrinkProduct[] = [];
+    for (const it of list) {
+      const key = keyOf("drinks", k, it);
+      const kept = pick.get(key);
+      if (!kept) pick.set(key, it);
+      else
+        pick.set(
+          key,
+          (Number(it.stock) || 0) < (Number(kept.stock) || 0) ? it : kept
+        );
+    }
+    for (const v of pick.values()) arr.push(v);
+    next.store.drinks[k] = arr;
+    pick.clear();
+  });
+
+  // Beans
+  const beans: BeanProduct[] = [];
+  for (const it of next.store.HandDrip || []) {
+    const key = keyOf("HandDrip", null, it);
+    const kept = pick.get(key);
+    if (!kept) pick.set(key, it);
+    else
+      pick.set(
+        key,
+        (Number(it.stock) || 0) < (Number(kept.stock) || 0) ? it : kept
+      );
+  }
+  for (const v of pick.values()) beans.push(v);
+  next.store.HandDrip = beans;
+
+  return next;
+}
+
+// ====== Provider ======
 export function AppStateProvider({ children }: { children: React.ReactNode }) {
   const [ready, setReady] = useState(false);
   const [orgId, setOrgId] = useState<string | null>(null);
   const [inventory, _setInventory] = useState<Inventory>(DEFAULT_INV);
   const [orders, setOrders] = useState<Order[]>([]);
+  const invVer = useRef<string | null>(null);
 
-  // ── Orders：從資料表讀，提供外部可重載 ──────────────────────────
+  // ---- 由 DB 讀取 Inventory（不再使用 app_state） ----
+  const reloadInventory = useCallback(async () => {
+    const rows = await fetchInventoryRows();
+    const ui: DBUIInventory = rowsToUIInventory(rows);
+    // 對齊舊 UI 型別
+    const normalized: Inventory = {
+      store: {
+        drinks: {
+          espresso: (ui.store.drinks.espresso || []) as any,
+          singleOrigin: (ui.store.drinks.singleOrigin || []) as any,
+        },
+        HandDrip: (ui.store.HandDrip || []) as any,
+      },
+    };
+    _setInventory(dedupeInventory(normalized));
+  }, []);
+
+  // Orders（沿用你的 DB 版 services）
   const reloadOrders = useCallback(async () => {
     try {
       const { rows } = await fetchOrders({ pageSize: 500, status: "all" });
@@ -150,49 +211,44 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
     }
   }, []);
 
-  // ── Inventory：從 DB v_inventory 讀，提供外部可重載 ──────────────
-  const reloadInventory = useCallback(async () => {
-    try {
-      const rows = await fetchInventoryRows();
-      _setInventory(rowsToUIInventory(rows));
-    } catch (e) {
-      console.error("[reloadInventory] failed:", e);
-    }
-  }, []);
-
-  // ── 初始化：取得 org → 載入 inventory & orders → 建立 Realtime ────
+  // 初始載入 + Realtime 訂閱
   useEffect(() => {
     let alive = true;
-
     (async () => {
       try {
-        const org = await getOrgIdForCurrentUser();
-        if (!alive) return;
-        setOrgId(org);
+        // 若你的系統需要 org，保留這段；不需要可移除
+        try {
+          const { data: auth } = await supabase.auth.getUser();
+          const uid = auth.user?.id;
+          if (uid) {
+            const { data, error } = await supabase
+              .from("employees")
+              .select("org_id")
+              .eq("user_id", uid)
+              .limit(1)
+              .maybeSingle();
+            if (!error) setOrgId((data as any)?.org_id ?? null);
+          }
+        } catch { /* noop */ }
 
-        // 先拉 inventory（DB）
         await reloadInventory();
-        // 再拉 orders（DB）
         await reloadOrders();
-
         setReady(true);
 
-        // Realtime：商品/庫存異動即刷新
+        // Realtime：只要 product_catalog / inventory_movements 有異動就重抓 inventory
         const chInv = supabase
-          .channel("inv_realtime")
-          .on(
-            "postgres_changes",
+          .channel("inventory_realtime")
+          .on("postgres_changes",
             { event: "*", schema: "public", table: "product_catalog" },
             () => reloadInventory()
           )
-          .on(
-            "postgres_changes",
-            { event: "*", schema: "public", table: "product_inventory" },
+          .on("postgres_changes",
+            { event: "*", schema: "public", table: "inventory_movements" },
             () => reloadInventory()
           )
           .subscribe();
 
-        // Realtime：訂單/明細異動即刷新
+        // Realtime：orders / order_items
         const chOrders = supabase
           .channel("orders_realtime")
           .on(
@@ -216,73 +272,72 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
         setReady(true);
       }
     })();
-
     return () => {
       alive = false;
     };
   }, [reloadInventory, reloadOrders]);
 
-  // ── setInventory：暫時只更新前端狀態（不落 DB） ───────────────────
-  // 之後請把 UI 編輯改為呼叫 upsertProduct / adjustStock，完全 DB 化。
+  // 僅本地更新（持久化請用 RPC）
   const setInventory = useCallback(
     async (updater: Inventory | ((prev: Inventory) => Inventory)) => {
-      const next =
+      const next = dedupeInventory(
         typeof updater === "function"
           ? (updater as (prev: Inventory) => Inventory)(inventory)
-          : updater;
+          : updater
+      );
       _setInventory(next);
-      // 不再 write app_state；若要永久保存請改用 services/inventory 的 RPC
     },
     [inventory]
   );
 
-  // ── 下單：送 RPC，完成後刷新 orders（DB 負責扣庫存） ───────────────
-  const createOrder = useCallback(async (cart: CartItem[] = [], _t?: number, extra?: { paymentMethod?: string }) => {
-  if (!Array.isArray(cart) || cart.length === 0) return null;
+  // 相容門市下單：走 DB placeOrder（不再寫 app_state）
+  const createOrder = useCallback(
+    async (
+      cart: CartItem[] = [],
+      _totalFromUI?: number,
+      extra?: { paymentMethod?: string }
+    ) => {
+      if (!Array.isArray(cart) || cart.length === 0) return null;
 
-  const items: PlaceOrderItem[] = cart.map((it) => {
-    const isDrink = it.category === "drinks";
-    return {
-      name: it.name,
-      sku: isDrink ? `${it.id}-${(it as any).subKey ?? ""}` : `${it.id}-${(it as any).grams ?? 0}g`,
-      qty: it.qty,
-      price: (it as any).price || 30,
-      category: isDrink ? "drinks" : "HandDrip",
-      sub_key: isDrink ? ((it as any).subKey as any) : undefined,
-      grams: isDrink ? undefined : Number((it as any).grams ?? 0) || undefined,
-    };
-  });
+      const items: PlaceOrderItem[] = cart.map((it) => {
+        const isDrink = it.category === "drinks";
+        return {
+          name: it.name,
+          sku: isDrink
+            ? `${it.id}-${(it as any).subKey ?? ""}`
+            : `${it.id}-${(it as any).grams ?? 0}g`,
+          qty: it.qty,
+          price: (it as any).price || 30,
+          category: isDrink ? "drinks" : "HandDrip",
+          sub_key: isDrink ? ((it as any).subKey as any) : undefined,
+          grams: isDrink ? undefined : Number((it as any).grams ?? 0) || undefined,
+        };
+      });
 
-  try {
-    const id = await placeOrder(items, extra?.paymentMethod || "Cash", "ACTIVE");
-    await reloadOrders();
-    return id;
-  } catch (e: any) {
-    console.error("[createOrder] failed:", e);
-    alert(e?.message ?? "Create order failed");
-    return null;
-  }
-}, [reloadOrders]);
-
-
-  // ── 作廢：RPC（可選回補），完成後刷新 ───────────────────────────────
-  const voidOrder = useCallback(
-    async (orderId: string, opt?: { restock?: boolean; reason?: string }) => {
-      await voidOrderDB(orderId, { reason: opt?.reason, restock: !!opt?.restock });
-      if (opt?.restock) {
-        try { await restockByOrder(orderId); } catch { /* 可忽略 */ }
-      }
+      const id = await placeOrder(items, extra?.paymentMethod || "Cash", "ACTIVE");
       await reloadOrders();
-      // 同理需要的話可同步刷新庫存
-      // await reloadInventory();
+      return id;
     },
     [reloadOrders]
   );
 
-  // ── repairInventory：完全 DB 化後改為「重新讀庫存」 ────────────────
+  // 作廢（DB）
+  const voidOrder = useCallback(
+    async (orderId: string, opt?: { restock?: boolean; reason?: string }) => {
+      await voidOrderDB(orderId, { reason: opt?.reason });
+      if (opt?.restock) {
+        try { await restockByOrder(orderId); } catch {}
+      }
+      await reloadOrders();
+    },
+    [reloadOrders]
+  );
+
+  // 現在僅做去重 & 本地校正
   const repairInventory = useCallback(async () => {
-    await reloadInventory();
-  }, [reloadInventory]);
+    const next = dedupeInventory(inventory);
+    _setInventory(next);
+  }, [inventory]);
 
   const value = useMemo<Ctx>(
     () => ({
@@ -291,24 +346,12 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
       inventory,
       orders,
       setInventory,
+      reloadInventory,
       createOrder,
       voidOrder,
       repairInventory,
-      reloadOrders,
-      reloadInventory,
     }),
-    [
-      ready,
-      orgId,
-      inventory,
-      orders,
-      setInventory,
-      createOrder,
-      voidOrder,
-      repairInventory,
-      reloadOrders,
-      reloadInventory,
-    ]
+    [ready, orgId, inventory, orders, setInventory, reloadInventory, createOrder, voidOrder, repairInventory]
   );
 
   return <AppStateContext.Provider value={value}>{children}</AppStateContext.Provider>;
