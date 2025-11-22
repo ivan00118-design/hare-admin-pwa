@@ -1,7 +1,8 @@
 // src/services/orders.ts
 import { supabase } from "../supabaseClient";
 
-// ---------- 型別 ----------
+/** ========= 型別 ========= */
+
 export type UIStatus = "all" | "active" | "voided";
 
 export type PlaceOrderItem = {
@@ -19,49 +20,13 @@ export type DeliveryInfo = {
   phone?: string | null;
   address?: string | null;
   note?: string | null;
-  scheduled_at?: string | null;         // ISO 字串（可選）
-
-  // ⬇⬇ 新增：出貨狀態（出貨清單用），預設 PENDING
+  scheduled_at?: string | null;
+  /** 出貨清單用（可省略，DB 端會預設 PENDING） */
   ship_status?: "PENDING" | "CLOSED" | null;
 };
 
-// 設定出貨狀態：先試 RPC set_delivery_ship_status，若沒有則 fallback 成一般 update
-export async function setOrderShipStatus(
-  orderId: string,
-  shipStatus: "PENDING" | "CLOSED"
-) {
-  // 1) 嘗試 RPC（如果你有建）
-  try {
-    const rpc = await supabase.rpc("set_delivery_ship_status", {
-      p_order_id: orderId,
-      p_ship_status: shipStatus,
-    });
-    if (!rpc.error) return;
-  } catch { /* ignore and fallback */ }
-
-  // 2) Fallback：讀出原本 delivery_info 後回寫（保留其他欄位）
-  const { data, error: selErr } = await supabase
-    .from("orders")
-    .select("delivery_info")
-    .eq("id", orderId)
-    .maybeSingle();
-
-  if (selErr) throw selErr;
-
-  const prev = (data as any)?.delivery_info ?? {};
-  const next = { ...prev, ship_status: shipStatus };
-
-  const { error: updErr } = await supabase
-    .from("orders")
-    .update({ delivery_info: next })
-    .eq("id", orderId);
-
-  if (updErr) throw updErr;
-}
-
-
 export type PlaceOrderOptions = {
-  channel?: "IN_STORE" | "DELIVERY";
+  /** 不再由前端直接傳 channel；由 deliveryInfo 是否有值在 DB 端判斷是否外送 */
   deliveryFee?: number;
   deliveryInfo?: DeliveryInfo | null;
   status?: "ACTIVE" | "VOIDED";
@@ -70,13 +35,14 @@ export type PlaceOrderOptions = {
 export interface FetchParams {
   from?: Date | null;
   to?: Date | null;
-  status?: UIStatus;                               // "all" | "active" | "voided"
-  channel?: "ALL" | "IN_STORE" | "DELIVERY";       // 可選
+  status?: UIStatus;                        // "all" | "active" | "voided"
+  channel?: "ALL" | "IN_STORE" | "DELIVERY";// 可選（同時相容 is_delivery）
   page?: number;
   pageSize?: number;
 }
 
-// ---------- 小工具 ----------
+/** ========= 小工具 ========= */
+
 function startOfDay(d: Date) {
   const x = new Date(d);
   x.setHours(0, 0, 0, 0);
@@ -88,10 +54,76 @@ function endOfDay(d: Date) {
   return x.toISOString();
 }
 
-// ---------- 查詢訂單（雙查詢：orders + order_items.in(order_id, ids)） ----------
+/** ========= 出貨清單（完全 DB 化） ========= */
+
+export type ShipStatus = "PENDING" | "CLOSED";
+export type ShippingRow = {
+  id: string;
+  created_at: string;
+  status: string;                // orders.status（ACTIVE / VOIDED）
+  payment_method: string | null;
+  total: number;
+  channel: "DELIVERY" | "IN_STORE" | null;
+  delivery_json: any;
+  ship_status: ShipStatus | null;
+  customer_name: string | null;
+  items_count: number;
+};
+
+/** 讀取出貨清單（直接查 View v_shipping_list_compat；若你用的是 table delivery_shipments，也可改查該表） */
+export async function listShipping(status: ShipStatus, limit = 200): Promise<ShippingRow[]> {
+  const { data, error } = await supabase
+    .from("v_shipping_list_compat")
+    .select("*")
+    .eq("ship_status", status)
+    .order("created_at", { ascending: false })
+    .limit(limit);
+
+  if (error) throw error;
+  return (data ?? []) as ShippingRow[];
+}
+
+/** 設定單筆出貨狀態（先試 RPC set_delivery_ship_status；若沒有 RPC，回退為直接更新 orders.delivery_info->ship_status） */
+export async function setOrderShipStatus(orderId: string, shipStatus: ShipStatus) {
+  // 1) 先嘗試 RPC（建議）
+  try {
+    const rpc = await supabase.rpc("set_delivery_ship_status", {
+      p_order_id: orderId,
+      p_ship_status: shipStatus,
+    });
+    if (!rpc.error) return;
+  } catch {
+    // ignore，改用 fallback
+  }
+
+  // 2) Fallback：把 delivery_info 取出後回寫（保留其餘欄位）
+  const sel = await supabase
+    .from("orders")
+    .select("delivery_info")
+    .eq("id", orderId)
+    .maybeSingle();
+
+  if (sel.error) throw sel.error;
+
+  const prev = (sel.data as any)?.delivery_info ?? {};
+  const next = { ...prev, ship_status: shipStatus };
+
+  const upd = await supabase
+    .from("orders")
+    .update({ delivery_info: next })
+    .eq("id", orderId);
+
+  if (upd.error) throw upd.error;
+}
+
+/** ========= 查詢訂單（orders + order_items 分段抓） =========
+ * 相容兩種 schema：
+ *  - 新：channel / delivery_info
+ *  - 舊：is_delivery / delivery
+ * 並回傳 totalAmount，History 可直接顯示。
+ */
 export async function fetchOrders({
-  from, to, status = "all",
-  channel = "ALL",
+  from, to, status = "all", channel = "ALL",
   page = 0, pageSize = 20,
 }: FetchParams): Promise<{ rows: any[]; count: number; totalAmount: number }> {
 
@@ -100,13 +132,11 @@ export async function fetchOrders({
   const fromIdx = page * pageSize;
   const toIdx   = fromIdx + pageSize - 1;
 
-  
-  // 先以「舊欄位」為主（is_delivery / delivery），若 DB 沒有再回退「新欄位」（channel / delivery_info）
+  // --- 先以「舊欄位」為主（is_delivery / delivery），若 DB 沒有再回退「新欄位」（channel / delivery_info） ---
   const buildLegacy = () => {
     let q = supabase
       .from("orders")
-      .select(
-        `
+      .select(`
         id,
         created_at,
         status,
@@ -117,9 +147,7 @@ export async function fetchOrders({
         delivery,
         void_reason,
         voided_at
-      `,
-        { count: "exact" }
-      )
+      `, { count: "exact" })
       .order("created_at", { ascending: false });
 
     if (fromISO) q = q.gte("created_at", fromISO);
@@ -134,8 +162,7 @@ export async function fetchOrders({
   const buildChannel = () => {
     let q = supabase
       .from("orders")
-      .select(
-        `
+      .select(`
         id,
         created_at,
         status,
@@ -146,9 +173,7 @@ export async function fetchOrders({
         delivery_info,
         void_reason,
         voided_at
-      `,
-        { count: "exact" }
-      )
+      `, { count: "exact" })
       .order("created_at", { ascending: false });
 
     if (fromISO) q = q.gte("created_at", fromISO);
@@ -160,10 +185,15 @@ export async function fetchOrders({
     return q.range(fromIdx, toIdx);
   };
 
-  // 先嘗試 legacy，失敗再用 channel
+  // 嘗試 legacy；若查詢錯誤（多半是欄位不存在），就改走 channel
   let ordRes = await buildLegacy();
+  if (ordRes.error?.code === "42703" /* 未知欄位 */) {
+    ordRes = await buildChannel();
+  } else if (ordRes.error) {
+    throw ordRes.error;
+  }
 
-  // 先把 orders 轉成統一 UI 欄位
+  // 先把 orders 正規化
   const baseRows = (ordRes.data ?? []).map((r: any) => ({
     id: r.id,
     createdAt: r.created_at,
@@ -185,7 +215,7 @@ export async function fetchOrders({
     return { rows: baseRows, count: ordRes.count ?? 0, totalAmount: 0 };
   }
 
-  // 再把 order_items 一次抓回來並關聯
+  // 以 order_id IN (...) 抓 order_items，解決 History 細項為 0 的問題
   const itsRes = await supabase
     .from("order_items")
     .select("order_id,name,category,sub_key,grams,qty,price,sku")
@@ -212,40 +242,31 @@ export async function fetchOrders({
   return { rows: baseRows, count: ordRes.count ?? 0, totalAmount };
 }
 
-// ---------- 下單（支援通路/運費/配送資訊；含舊版 RPC 向後相容） ----------
+/** ========= 下單（由 DB 觸發器自動寫 Shipping List） =========
+ * 只需把 deliveryInfo 帶進去（有值＝外送單），其餘交給 DB 的 place_order RPC + 觸發器處理。
+ */
 export async function placeOrder(
   items: PlaceOrderItem[],
   paymentMethod: string,
   status: "ACTIVE" | "VOIDED" = "ACTIVE",
-  opts: {
-    // ⛔️ 這裡不要再交由呼叫端傳 channel
-    deliveryFee?: number;
-    deliveryInfo?: DeliveryInfo | null;
-    // 可選：仍可覆寫狀態
-    status?: "ACTIVE" | "VOIDED";
-  } = {}
+  opts: PlaceOrderOptions = {}
 ) {
-  const itemsTotal = items.reduce(
-    (s, it) => s + Number(it.qty) * Number(it.price),
-    0
-  );
+  const itemsTotal = items.reduce((s, it) => s + Number(it.qty) * Number(it.price), 0);
 
-  // 新版 RPC 參數（建議）
-  const payload: Record<string, any> = {
+  const { data, error } = await supabase.rpc("place_order", {
     p_payment_method: paymentMethod,
     p_items: items,
     p_total: itemsTotal,
     p_status: opts.status ?? status,
+    // 不再直接傳 channel，由 DB 依 delivery_info 判斷是否外送
     p_delivery_fee: opts.deliveryFee ?? 0,
-    p_delivery_info: opts.deliveryInfo ?? {},     // DB 依這個判斷是否為外送
-    // 解除 RPC overloading（PGRST203）
+    p_delivery_info: opts.deliveryInfo ?? {},
+    // 這一行用來打破「函式重載歧義 (PGRST203)」
     p_fail_when_insufficient: false,
-  };
-
-  const { data, error } = await supabase.rpc("place_order", payload);
+  });
   if (error) throw error;
-  return data as string;
-  }
+  return data as string; // order id
+}
 
 export async function placeDelivery(
   items: PlaceOrderItem[],
@@ -261,17 +282,17 @@ export async function placeDelivery(
   });
 }
 
-// ---------- 作廢（走 RPC；若你有回補庫存可在 DB 端處理） ----------
+/** ========= 作廢（DB 端可同時處理回補庫存） ========= */
 export async function voidOrderDB(orderId: string, opts?: { reason?: string; restock?: boolean }) {
-  const res = await supabase.rpc("void_order", {
+  const { error } = await supabase.rpc("void_order", {
     p_order_id: orderId,
     p_reason: opts?.reason ?? null,
     p_restock: !!opts?.restock,
   });
-  if (res.error) throw res.error;
+  if (error) throw error;
 }
 
 export async function restockByOrder(_orderId: string) {
-  // DB 端若已有回補庫存邏輯，可在 void_order 內處理；這裡保留接口即可。
+  // 如需回補庫存可在 DB 端 void_order 內處理；前端維持空殼
   return;
 }
