@@ -62,19 +62,11 @@ function normalizeIsDelivery(row: any): boolean {
 /* ========= Shipping List（完全 DB 化） ========= */
 export type ShipStatus = "PENDING" | "CLOSED";
 export type ShippingRow = {
-  id: string;                 // order id
-  created_at: string;
-  status: string;
-  payment_method: string | null;
-  total: number;
-  channel: "DELIVERY" | "IN_STORE";
-  delivery_json: any;
-  ship_status: ShipStatus | null;
-  customer_name: string | null;
-  items_count: number;
+  id: string; created_at: string; status: string;
+  payment_method: string | null; total: number; channel: "DELIVERY" | "IN_STORE";
+  delivery_json: any; ship_status: ShipStatus | null; customer_name: string | null; items_count: number;
 };
 
-// 直接讀取 View（第 C 節給了 View 的 SQL）
 export async function listShipping(status: ShipStatus, limit = 200) {
   const { data, error } = await supabase
     .from("v_shipping_list_compat")
@@ -86,7 +78,6 @@ export async function listShipping(status: ShipStatus, limit = 200) {
   return (data ?? []) as ShippingRow[];
 }
 
-// 透過 RPC 設定出貨狀態（第 C 節給了 RPC 的 SQL）
 export async function setOrderShipStatus(orderId: string, shipStatus: ShipStatus) {
   const { error } = await supabase.rpc("set_delivery_ship_status", {
     p_order_id: orderId,
