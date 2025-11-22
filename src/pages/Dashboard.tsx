@@ -57,7 +57,11 @@ export default function Dashboard() {
   );
 
   // 外送訂單判斷：之後若你在 DB 增加欄位（如 orders.is_delivery 或 delivery json），這裡即會生效
-  const isDeliveryOrder = (o: any) => !!o?.delivery || !!o?.is_delivery;
+  const isDeliveryOrder = (o: any) =>
+  typeof o?.isDelivery === "boolean"
+    ? o.isDelivery
+    : (o?.channel === "DELIVERY");
+
 
   // 拆分營收 + 計數
   const byType = useMemo(() => {
