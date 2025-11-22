@@ -19,8 +19,46 @@ export type DeliveryInfo = {
   phone?: string | null;
   address?: string | null;
   note?: string | null;
-  scheduled_at?: string | null;
+  scheduled_at?: string | null;         // ISO 字串（可選）
+
+  // ⬇⬇ 新增：出貨狀態（出貨清單用），預設 PENDING
+  ship_status?: "PENDING" | "CLOSED" | null;
 };
+
+// 設定出貨狀態：先試 RPC set_delivery_ship_status，若沒有則 fallback 成一般 update
+export async function setOrderShipStatus(
+  orderId: string,
+  shipStatus: "PENDING" | "CLOSED"
+) {
+  // 1) 嘗試 RPC（如果你有建）
+  try {
+    const rpc = await supabase.rpc("set_delivery_ship_status", {
+      p_order_id: orderId,
+      p_ship_status: shipStatus,
+    });
+    if (!rpc.error) return;
+  } catch { /* ignore and fallback */ }
+
+  // 2) Fallback：讀出原本 delivery_info 後回寫（保留其他欄位）
+  const { data, error: selErr } = await supabase
+    .from("orders")
+    .select("delivery_info")
+    .eq("id", orderId)
+    .maybeSingle();
+
+  if (selErr) throw selErr;
+
+  const prev = (data as any)?.delivery_info ?? {};
+  const next = { ...prev, ship_status: shipStatus };
+
+  const { error: updErr } = await supabase
+    .from("orders")
+    .update({ delivery_info: next })
+    .eq("id", orderId);
+
+  if (updErr) throw updErr;
+}
+
 
 export type PlaceOrderOptions = {
   channel?: "IN_STORE" | "DELIVERY";
