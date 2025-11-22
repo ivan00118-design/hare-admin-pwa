@@ -8,10 +8,10 @@ export type PlaceOrderItem = {
   name: string;
   sku?: string | null;
   qty: number;
-  price: number;                          // 與 DB 單位一致（元或分）
+  price: number;
   category?: "HandDrip" | "drinks";
-  grams?: number;                         // 豆子才有
-  sub_key?: "espresso" | "singleOrigin";  // 飲品才有
+  grams?: number;
+  sub_key?: "espresso" | "singleOrigin";
 };
 
 export type DeliveryInfo = {
@@ -19,7 +19,7 @@ export type DeliveryInfo = {
   phone?: string | null;
   address?: string | null;
   note?: string | null;
-  scheduled_at?: string | null;          // ISO
+  scheduled_at?: string | null;
 };
 
 export type PlaceOrderOptions = {
@@ -179,48 +179,45 @@ export async function placeOrder(
   items: PlaceOrderItem[],
   paymentMethod: string,
   status: "ACTIVE" | "VOIDED" = "ACTIVE",
-  opts: PlaceOrderOptions = {}
+  opts: {
+    // ⛔️ 這裡不要再交由呼叫端傳 channel
+    deliveryFee?: number;
+    deliveryInfo?: DeliveryInfo | null;
+    // 可選：仍可覆寫狀態
+    status?: "ACTIVE" | "VOIDED";
+  } = {}
 ) {
-  const itemsTotal = items.reduce((s, it) => s + Number(it.qty) * Number(it.price), 0);
+  const itemsTotal = items.reduce(
+    (s, it) => s + Number(it.qty) * Number(it.price),
+    0
+  );
 
   // 新版 RPC 參數（建議）
-  const fullArgs: Record<string, any> = {
+  const payload: Record<string, any> = {
     p_payment_method: paymentMethod,
     p_items: items,
     p_total: itemsTotal,
     p_status: opts.status ?? status,
-    p_channel: opts.channel ?? "IN_STORE",
     p_delivery_fee: opts.deliveryFee ?? 0,
-    p_delivery_info: opts.deliveryInfo ?? {},
+    p_delivery_info: opts.deliveryInfo ?? {},     // DB 依這個判斷是否為外送
+    // 解除 RPC overloading（PGRST203）
     p_fail_when_insufficient: false,
   };
 
-  let res = await supabase.rpc("place_order", fullArgs);
-
-  // 若環境仍是舊簽名，回退到最小參數組（避免 PGRST203）
-  if (res.error && String(res.error.message || "").toLowerCase().includes("could not choose")) {
-    const legacyArgs = {
-      p_payment_method: paymentMethod,
-      p_items: items,
-      p_total: itemsTotal,
-      p_status: opts.status ?? status,
-    };
-    res = await supabase.rpc("place_order", legacyArgs);
+  const { data, error } = await supabase.rpc("place_order", payload);
+  if (error) throw error;
+  return data as string;
   }
-
-  if (res.error) throw res.error;
-  return res.data as string; // order id
-}
 
 export async function placeDelivery(
   items: PlaceOrderItem[],
   paymentMethod: string,
   info: DeliveryInfo,
-  deliveryFee: number = 0,
+  deliveryFee = 0,
   status: "ACTIVE" | "VOIDED" = "ACTIVE"
 ) {
+  // 外送單同樣走 placeOrder，但只傳 deliveryInfo / deliveryFee
   return placeOrder(items, paymentMethod, status, {
-    channel: "DELIVERY",
     deliveryInfo: info,
     deliveryFee,
   });
