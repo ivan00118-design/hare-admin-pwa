@@ -14,7 +14,7 @@ import {
 import iconSimplePay from "../assets/payments/SimplePay.jpg";
 import iconCash from "../assets/payments/Cash.png";
 import iconMacauPass from "../assets/payments/MacauPass.png";
-
+import iconQRCode from "../assets/payments/QRCode.png";
 // DB 化的 Shortcuts 服務（維持你現有 export 名稱）
 import {
   loadDeliveryShortcuts,
@@ -111,6 +111,7 @@ export default function Delivery() {
     { key: "SimplePay", label: "SimplePay", icon: iconSimplePay },
     { key: "Cash", label: "Cash", icon: iconCash },
     { key: "MacauPass", label: "MacauPass", icon: iconMacauPass },
+    { key: "QRCode", label: "QR Code", icon: iconQRCode },
   ] as const;
 
   /** 只取 beans（HandDrip） */

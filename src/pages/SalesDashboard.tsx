@@ -13,6 +13,7 @@ import {
 import iconSimplePay from "../assets/payments/SimplePay.jpg";
 import iconCash from "../assets/payments/Cash.png";
 import iconMacauPass from "../assets/payments/MacauPass.png";
+import iconQRCode from "../assets/payments/QRCode.png";
 
 // --------- 可判別聯合 CartItem 型別 ---------
 type DrinkCartItem = UIItem & {
@@ -73,6 +74,7 @@ export default function SalesDashboard() {
     { key: "SimplePay", label: "SimplePay", icon: iconSimplePay },
     { key: "Cash", label: "Cash", icon: iconCash },
     { key: "MacauPass", label: "MacauPass", icon: iconMacauPass },
+    { key: "QRCode", label: "QR Code", icon: iconQRCode },
   ] as const;
 
   // 依目前 tab 取得商品清單
