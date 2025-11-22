@@ -14,7 +14,7 @@ import {
 import iconSimplePay from "../assets/payments/SimplePay.jpg";
 import iconCash from "../assets/payments/Cash.png";
 import iconMacauPass from "../assets/payments/MacauPass.png";
-import iconQRCode from "../assets/payments/QRCode.png";
+import iconQRCode from "../assets/payments/qrcode.png";
 // DB 化的 Shortcuts 服務（維持你現有 export 名稱）
 import {
   loadDeliveryShortcuts,

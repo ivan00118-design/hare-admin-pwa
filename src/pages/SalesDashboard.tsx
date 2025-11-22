@@ -13,7 +13,7 @@ import {
 import iconSimplePay from "../assets/payments/SimplePay.jpg";
 import iconCash from "../assets/payments/Cash.png";
 import iconMacauPass from "../assets/payments/MacauPass.png";
-import iconQRCode from "../assets/payments/QRCode.png";
+import iconQRCode from "../assets/payments/qrcode.png";
 
 // --------- 可判別聯合 CartItem 型別 ---------
 type DrinkCartItem = UIItem & {
