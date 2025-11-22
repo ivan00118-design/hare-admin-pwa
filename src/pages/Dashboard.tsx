@@ -21,6 +21,35 @@ const dateKey = (dLike: string | Date) => {
 };
 const todayKey = () => dateKey(new Date());
 
+// —— 更健壯的外送判斷（新/舊 schema 全部相容）——
+function looksLikeDelivery(o: any): boolean {
+  // 1) 前端統一欄位
+  if (typeof o?.isDelivery === "boolean") return o.isDelivery;
+
+  // 2) 舊欄位
+  if (typeof o?.is_delivery === "boolean") return !!o.is_delivery;
+
+  // 3) 新欄位 channel
+  if (typeof o?.channel === "string") {
+    const ch = o.channel.toUpperCase();
+    if (ch === "DELIVERY") return true;
+    if (ch === "IN_STORE") return false;
+  }
+
+  // 4) 有填配送資訊（新版 delivery_info 或舊版 delivery）
+  const deliveryJson = o?.delivery_info ?? o?.delivery;
+  if (deliveryJson && typeof deliveryJson === "object") {
+    const keys = Object.keys(deliveryJson);
+    if (keys.length > 0) return true;
+  }
+
+  // 5) 後備：有 delivery_fee（注意這不是萬用判斷，只作最後 fallback）
+  const fee = Number(o?.deliveryFee ?? o?.delivery_fee ?? 0);
+  if (fee > 0) return true;
+
+  return false;
+}
+
 export default function Dashboard() {
   const [picked, setPicked] = useState(todayKey());
 
@@ -51,26 +80,21 @@ export default function Dashboard() {
 
   // 本頁使用的有效訂單（fetchOrders 已過濾 active；這裡保險再排除一次）
   const validOrders = useMemo(() => rows.filter((o: any) => !o?.voided), [rows]);
+
+  // 當日的訂單
   const ordersOfDay = useMemo(
     () => validOrders.filter((o: any) => dateKey(o.createdAt) === picked),
     [validOrders, picked]
   );
 
-  // 外送訂單判斷：之後若你在 DB 增加欄位（如 orders.is_delivery 或 delivery json），這裡即會生效
-  const isDeliveryOrder = (o: any) =>
-  typeof o?.isDelivery === "boolean"
-    ? o.isDelivery
-    : (o?.channel === "DELIVERY");
-
-
-  // 拆分營收 + 計數
+  // —— 依 Delivery / Order 拆分營收 + 計數（使用 looksLikeDelivery）——
   const byType = useMemo(() => {
     let orderRevenue = 0, deliveryRevenue = 0;
     let orderCount = 0, deliveryCount = 0;
 
     for (const o of ordersOfDay as any[]) {
       const amt = Number(o?.total) || 0;
-      if (isDeliveryOrder(o)) {
+      if (looksLikeDelivery(o)) {
         deliveryRevenue += amt;
         deliveryCount += 1;
       } else {
