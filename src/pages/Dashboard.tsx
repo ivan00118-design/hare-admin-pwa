@@ -43,36 +43,28 @@ export default function Dashboard() {
       to,
       status: "active", // 只取未作廢
       page: 0,
-      pageSize: 1000, // 視需求調整
+      pageSize: 1000,
     })
       .then((res) => setRows(res.rows || []))
       .finally(() => setLoading(false));
   }, [picked]);
 
-  // 本頁使用的有效訂單（fetchOrders 已過濾 active；這裡保險再排除一次）
   const validOrders = useMemo(() => rows.filter((o: any) => !o?.voided), [rows]);
   const ordersOfDay = useMemo(
     () => validOrders.filter((o: any) => dateKey(o.createdAt) === picked),
     [validOrders, picked]
   );
 
-  // ✅ 外送訂單判斷（修正）
-  // 1) 優先使用 fetchOrders 統一輸出的 boolean 欄位：o.isDelivery
-  // 2) 回退看 delivery payload 是否有內容
-  // 3) 最後看 deliveryFee / delivery_fee 是否 > 0
+  // 更健壯的 Delivery 判斷
   const isDeliveryOrder = (o: any) => {
     if (typeof o?.isDelivery === "boolean") return o.isDelivery;
-
-    const hasDeliveryPayload =
-      o?.delivery &&
-      ((typeof o.delivery === "object" && Object.keys(o.delivery || {}).length > 0) ||
-        // 若後端曾輸出成非空字串/布林，也一併視為外送
-        (typeof o.delivery !== "object" && Boolean(o.delivery)));
-
-    const hasDeliveryFee =
-      Number(o?.deliveryFee) > 0 || Number((o as any)?.delivery_fee) > 0;
-
-    return Boolean(hasDeliveryPayload || hasDeliveryFee);
+    if (o?.channel) return o.channel === "DELIVERY";
+    // 後援：delivery JSON 有內容就視為 Delivery
+    const d = o?.delivery;
+    if (d && typeof d === "object" && Object.keys(d).length > 0) return true;
+    // 後援：有 deliveryFee 也可能是 Delivery（雖非必要，用作最後一層猜測）
+    if (o?.deliveryFee != null && Number(o.deliveryFee) > 0) return true;
+    return false;
   };
 
   // 拆分營收 + 計數
@@ -98,7 +90,6 @@ export default function Dashboard() {
     };
   }, [ordersOfDay]);
 
-  // AOV（All / Order / Delivery）
   const dayAOV = byType.dayCount ? byType.dayRevenue / byType.dayCount : 0;
   const orderAOV = byType.orderCount ? byType.orderRevenue / byType.orderCount : 0;
   const deliveryAOV = byType.deliveryCount ? byType.deliveryRevenue / byType.deliveryCount : 0;
@@ -155,7 +146,7 @@ export default function Dashboard() {
     return days.map((k) => ({ day: k, revenue: group.get(k)?.revenue || 0, count: group.get(k)?.count || 0 }));
   }, [validOrders, picked]);
 
-  // 交班訊息（含 Order/Delivery 的 Count 與 AOV）
+  // 交班訊息
   const buildShiftSummary = () => {
     const lines: string[] = [];
     lines.push(`Shift Summary — ${picked}`);

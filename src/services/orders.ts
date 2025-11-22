@@ -1,17 +1,17 @@
 // src/services/orders.ts
 import { supabase } from "../supabaseClient";
 
-/** --------- 型別 --------- */
+// ---------- 型別 ----------
 export type UIStatus = "all" | "active" | "voided";
 
 export type PlaceOrderItem = {
   name: string;
   sku?: string | null;
   qty: number;
-  price: number; // 與 DB 單位一致
+  price: number;                         // 與 DB 單位一致（元或分）
   category?: "HandDrip" | "drinks";
-  grams?: number;
-  sub_key?: "espresso" | "singleOrigin";
+  grams?: number;                        // 豆子品項才有
+  sub_key?: "espresso" | "singleOrigin";// 飲品才有
 };
 
 export type DeliveryInfo = {
@@ -19,26 +19,48 @@ export type DeliveryInfo = {
   phone?: string | null;
   address?: string | null;
   note?: string | null;
-  scheduled_at?: string | null; // ISO
-  ship_status?: "PENDING" | "CLOSED" | null; // 存在 delivery_info.ship_status
-};
-
-export type PlaceOrderOptions = {
-  deliveryFee?: number;
-  deliveryInfo?: DeliveryInfo | null;
-  status?: "ACTIVE" | "VOIDED";
+  scheduled_at?: string | null;         // ISO 字串（可選）
+  // 供 Shipping List 用
+  ship_status?: "PENDING" | "CLOSED" | null;
 };
 
 export interface FetchParams {
   from?: Date | null;
   to?: Date | null;
-  status?: UIStatus;
-  channel?: "ALL" | "IN_STORE" | "DELIVERY"; // 雙 schema 相容
+  status?: UIStatus;                               // "all" | "active" | "voided"
+  channel?: "ALL" | "IN_STORE" | "DELIVERY";       // 可選
   page?: number;
   pageSize?: number;
 }
 
-/** --------- 小工具 --------- */
+export type FetchOrdersResult = {
+  rows: Array<{
+    id: string;
+    createdAt: string;
+    paymentMethod?: string | null;
+    total: number;
+    deliveryFee?: number;
+    voided?: boolean;
+    voidReason?: string | null;
+    voidedAt?: string | null;
+    isDelivery?: boolean;
+    channel?: "IN_STORE" | "DELIVERY" | null;
+    delivery?: any | null;
+    items: Array<{
+      name: string;
+      category?: string | null;
+      subKey?: "espresso" | "singleOrigin" | null;
+      grams?: number | null;
+      qty: number;
+      price: number;
+      sku?: string | null;
+    }>;
+  }>;
+  count: number;
+  totalAmount: number;
+};
+
+// ---------- 小工具 ----------
 function startOfDay(d: Date) {
   const x = new Date(d);
   x.setHours(0, 0, 0, 0);
@@ -49,280 +71,179 @@ function endOfDay(d: Date) {
   x.setHours(23, 59, 59, 999);
   return x.toISOString();
 }
+function nonEmptyObject(obj: any) {
+  return obj && typeof obj === "object" && Object.keys(obj).length > 0;
+}
 
-/** --------- Shipping List（完全 DB 化） --------- */
-export type ShipStatus = "PENDING" | "CLOSED";
+// ---------- 查詢訂單（雙路徑：新版 channel/delivery_info 與舊版 is_delivery/delivery） ----------
+export async function fetchOrders({
+  from, to, status = "all",
+  channel = "ALL",
+  page = 0, pageSize = 20,
+}: FetchParams): Promise<FetchOrdersResult> {
 
-export type ShippingRow = {
-  id: string;
-  created_at: string;
-  status: string;
-  payment_method: string | null;
-  total: number;
-  channel?: "DELIVERY" | "IN_STORE" | null;
-  is_delivery?: boolean | null;
-  delivery_json: any;
-  ship_status: ShipStatus | null;
-  customer_name: string | null;
-  items_count: number;
-};
+  const fromISO = from ? startOfDay(from) : undefined;
+  const toISO   = to   ? endOfDay(to)   : undefined;
+  const fromIdx = page * pageSize;
+  const toIdx   = fromIdx + pageSize - 1;
 
-/** 從 orders 直接產生出貨清單（相容 channel/is_delivery 與 delivery/delivery_info） */
-export async function listShipping(status: ShipStatus, limit = 200): Promise<ShippingRow[]> {
-  // 用 "*" 避免欄位差異造成 select 失敗
-  const { data, error } = await supabase
-    .from("orders")
-    .select("*")
-    .order("created_at", { ascending: false })
-    .limit(limit);
+  // --- A) 新版（有 channel / delivery_info）
+  const runNew = () => {
+    let q = supabase
+      .from("orders")
+      .select(`
+        id, created_at, status, payment_method, total, delivery_fee,
+        channel, delivery_info,
+        void_reason, voided_at,
+        order_items ( name, category, sub_key, grams, qty, price, sku )
+      `, { count: "exact" })
+      .order("created_at", { ascending: false });
 
-  if (error) throw error;
+    if (fromISO) q = q.gte("created_at", fromISO);
+    if (toISO)   q = q.lte("created_at", toISO);
+    if (status !== "all") q = q.eq("status", status.toUpperCase());
+    if (channel !== "ALL") q = q.eq("channel", channel);
 
-  const all = (data ?? []) as any[];
+    return q.range(fromIdx, toIdx);
+  };
 
-  const rows = all
-    .map((r) => {
-      const delivery_json = r.delivery_info ?? r.delivery ?? null;
-      const channel = r.channel ?? null;
-      const is_delivery = typeof r.is_delivery === "boolean" ? r.is_delivery : null;
-      const consideredDelivery =
-        channel === "DELIVERY" ||
-        is_delivery === true ||
-        (delivery_json != null && typeof delivery_json === "object");
+  // --- B) 舊版（is_delivery / delivery）
+  const runLegacy = () => {
+    let q = supabase
+      .from("orders")
+      .select(`
+        id, created_at, status, payment_method, total, delivery_fee,
+        is_delivery, delivery,
+        void_reason, voided_at,
+        order_items ( name, category, sub_key, grams, qty, price, sku )
+      `, { count: "exact" })
+      .order("created_at", { ascending: false });
 
-      if (!consideredDelivery) return null;
+    if (fromISO) q = q.gte("created_at", fromISO);
+    if (toISO)   q = q.lte("created_at", toISO);
+    if (status !== "all") q = q.eq("status", status.toUpperCase());
+    // 舊版沒有 channel 欄位，channel 過濾略過
+    return q.range(fromIdx, toIdx);
+  };
 
-      const ship = (delivery_json?.ship_status ?? null) as ShipStatus | null;
-      const customer_name =
-        (delivery_json?.customer_name ?? delivery_json?.recipient ?? null) as string | null;
+  // 先走新版，若 400/不存在欄位則回退舊版
+  try {
+    const resp = await runNew();
+    if (resp.error) throw resp.error;
+    const rows = (resp.data ?? []).map((r: any) => {
+      const looksLikeDelivery =
+        (r.channel && r.channel === "DELIVERY") ||
+        nonEmptyObject(r.delivery_info) ||
+        Number(r.delivery_fee ?? 0) > 0;
 
       return {
-        id: r.id as string,
-        created_at: r.created_at as string,
-        status: r.status as string,
-        payment_method: r.payment_method ?? null,
-        total: Number(r.total ?? 0),
-        channel,
-        is_delivery,
-        delivery_json,
-        ship_status: (ship ?? "PENDING") as ShipStatus,
-        customer_name,
-        items_count: 0,
-      } as ShippingRow;
-    })
-    .filter(Boolean) as ShippingRow[];
-
-  const filtered = rows.filter((r) => (r.ship_status ?? "PENDING") === status);
-
-  // 取 items_count
-  const ids = filtered.map((r) => r.id);
-  if (ids.length > 0) {
-    const its = await supabase
-      .from("order_items")
-      .select("order_id")
-      .in("order_id", ids);
-    if (!its.error) {
-      const cnt = new Map<string, number>();
-      for (const row of its.data ?? []) {
-        cnt.set(row.order_id, (cnt.get(row.order_id) ?? 0) + 1);
-      }
-      for (const r of filtered) r.items_count = cnt.get(r.id) ?? 0;
-    }
-  }
-
-  return filtered;
-}
-
-/** 設定出貨狀態：先 RPC，失敗則 fallback 寫回 delivery_info JSON */
-export async function setOrderShipStatus(orderId: string, shipStatus: ShipStatus): Promise<void> {
-  try {
-    const rpc = await supabase.rpc("set_delivery_ship_status", {
-      p_order_id: orderId,
-      p_ship_status: shipStatus,
-    });
-    if (!rpc.error) return;
-  } catch {
-    /* ignore */
-  }
-
-  const sel = await supabase
-    .from("orders")
-    .select("delivery_info, delivery")
-    .eq("id", orderId)
-    .maybeSingle();
-  if (sel.error) throw sel.error;
-
-  const src = (sel.data?.delivery_info ?? sel.data?.delivery ?? {}) as Record<string, any>;
-  const next = { ...src, ship_status: shipStatus };
-
-  const upd = await supabase
-    .from("orders")
-    .update({ delivery_info: next })
-    .eq("id", orderId);
-  if (upd.error) throw upd.error;
-}
-
-/** --------- 查詢訂單（兩段查詢補齊 items；相容舊新 schema） --------- */
-export async function fetchOrders({
-  from,
-  to,
-  status = "all",
-  channel = "ALL",
-  page = 0,
-  pageSize = 20,
-}: FetchParams): Promise<{ rows: any[]; count: number; totalAmount: number }> {
-  const fromISO = from ? startOfDay(from) : undefined;
-  const toISO = to ? endOfDay(to) : undefined;
-  const fromIdx = page * pageSize;
-  const toIdx = fromIdx + pageSize - 1;
-
-  let q = supabase
-    .from("orders")
-    .select("*", { count: "exact" })
-    .order("created_at", { ascending: false });
-
-  if (fromISO) q = q.gte("created_at", fromISO);
-  if (toISO) q = q.lte("created_at", toISO);
-  if (status !== "all") q = q.eq("status", status.toUpperCase());
-
-  // 若有 channel 欄位則直接使用過濾；沒有就交由前端過濾
-  if (channel === "IN_STORE") q = q.eq("channel", "IN_STORE");
-  if (channel === "DELIVERY") q = q.eq("channel", "DELIVERY");
-
-  const ordRes = await q.range(fromIdx, toIdx);
-  if (ordRes.error) throw ordRes.error;
-
-  const baseRows = (ordRes.data ?? []).map((r: any) => {
-    const delivery_json = r.delivery_info ?? r.delivery ?? null;
-    const isDelivery =
-      r.channel ? r.channel === "DELIVERY" : typeof r.is_delivery === "boolean" ? !!r.is_delivery : !!delivery_json;
-
-    return {
-      id: r.id,
-      createdAt: r.created_at,
-      paymentMethod: r.payment_method,
-      total: r.total,
-      deliveryFee: r.delivery_fee ?? 0,
-      voided: r.status === "VOIDED",
-      voidReason: r.void_reason ?? null,
-      voidedAt: r.voided_at ?? null,
-      isDelivery,
-      delivery: delivery_json,
-      items: [] as any[],
-    };
-  });
-
-  const rowsByChannel =
-    channel === "ALL"
-      ? baseRows
-      : baseRows.filter((r) => (channel === "DELIVERY" ? r.isDelivery : !r.isDelivery));
-
-  const ids = rowsByChannel.map((r) => r.id);
-  if (ids.length > 0) {
-    const itsRes = await supabase
-      .from("order_items")
-      .select("order_id,name,category,sub_key,grams,qty,price,sku")
-      .in("order_id", ids);
-    if (!itsRes.error) {
-      const byOrder = new Map<string, any[]>();
-      for (const it of itsRes.data ?? []) {
-        if (!byOrder.has(it.order_id)) byOrder.set(it.order_id, []);
-        byOrder.get(it.order_id)!.push({
+        id: r.id,
+        createdAt: r.created_at,
+        paymentMethod: r.payment_method,
+        total: Number(r.total) || 0,
+        deliveryFee: Number(r.delivery_fee ?? 0),
+        voided: r.status === "VOIDED",
+        voidReason: r.void_reason ?? null,
+        voidedAt: r.voided_at ?? null,
+        isDelivery: looksLikeDelivery,
+        channel: (r.channel ?? null) as any,
+        delivery: r.delivery_info ?? null,
+        items: (r.order_items ?? []).map((it: any) => ({
           name: it.name,
           category: it.category ?? null,
           subKey: it.sub_key ?? null,
-          grams: typeof it.grams === "number" ? it.grams : it.grams ?? null,
+          grams: typeof it.grams === "number" ? it.grams : (it.grams ?? null),
           qty: it.qty,
           price: it.price,
           sku: it.sku ?? null,
-        });
-      }
-      for (const r of rowsByChannel) r.items = byOrder.get(r.id) ?? [];
-    }
-  }
+        })),
+      };
+    });
 
-  const totalAmount = rowsByChannel.reduce((s, r) => s + (Number(r.total) || 0), 0);
-  return { rows: rowsByChannel, count: ordRes.count ?? 0, totalAmount };
+    const totalAmount = rows.reduce((s, r) => s + (Number(r.total) || 0), 0);
+    return { rows, count: resp.count ?? 0, totalAmount };
+
+  } catch {
+    const resp = await runLegacy();
+    if (resp.error) throw resp.error;
+    const rows = (resp.data ?? []).map((r: any) => {
+      const looksLikeDelivery =
+        r.is_delivery === true ||
+        nonEmptyObject(r.delivery) ||
+        Number(r.delivery_fee ?? 0) > 0;
+
+      return {
+        id: r.id,
+        createdAt: r.created_at,
+        paymentMethod: r.payment_method,
+        total: Number(r.total) || 0,
+        deliveryFee: Number(r.delivery_fee ?? 0),
+        voided: r.status === "VOIDED",
+        voidReason: r.void_reason ?? null,
+        voidedAt: r.voided_at ?? null,
+        isDelivery: looksLikeDelivery,
+        channel: null as any,
+        delivery: r.delivery ?? null,
+        items: (r.order_items ?? []).map((it: any) => ({
+          name: it.name,
+          category: it.category ?? null,
+          subKey: it.sub_key ?? null,
+          grams: typeof it.grams === "number" ? it.grams : (it.grams ?? null),
+          qty: it.qty,
+          price: it.price,
+          sku: it.sku ?? null,
+        })),
+      };
+    });
+
+    const totalAmount = rows.reduce((s, r) => s + (Number(r.total) || 0), 0);
+    return { rows, count: resp.count ?? 0, totalAmount };
+  }
 }
 
-/** --------- 下單：多版 RPC 相容（不主動寫入 channel；以 delivery_info 讓 DB 決定） --------- */
+// ---------- 下單（Delivery 單只要傳 deliveryInfo；門市單請傳 null） ----------
 export async function placeOrder(
   items: PlaceOrderItem[],
   paymentMethod: string,
   status: "ACTIVE" | "VOIDED" = "ACTIVE",
-  opts: PlaceOrderOptions = {}
-): Promise<string> {
+  opts: { deliveryFee?: number; deliveryInfo?: DeliveryInfo | null; status?: "ACTIVE" | "VOIDED" } = {}
+) {
   const itemsTotal = items.reduce((s, it) => s + Number(it.qty) * Number(it.price), 0);
 
-  const tryPayloads: Record<string, any>[] = [
-    // 新版 payload
-    {
-      p_payment_method: paymentMethod,
-      p_items: items,
-      p_total: itemsTotal,
-      p_status: opts.status ?? status,
-      p_delivery_fee: opts.deliveryFee ?? 0,
-      p_delivery_info: opts.deliveryInfo ?? {},
-      p_fail_when_insufficient: false,
-    },
-    // 沒有 p_fail_when_insufficient 的版本
-    {
-      p_payment_method: paymentMethod,
-      p_items: items,
-      p_total: itemsTotal,
-      p_status: opts.status ?? status,
-      p_delivery_fee: opts.deliveryFee ?? 0,
-      p_delivery_info: opts.deliveryInfo ?? {},
-    },
-    // 最小參數（非常舊版）
-    {
-      p_payment_method: paymentMethod,
-      p_items: items,
-      p_total: itemsTotal,
-      p_status: opts.status ?? status,
-    },
-  ];
+  // 僅在「有 deliveryInfo」時才傳入（避免用 {} 造成被視為 Delivery）
+  const info = opts.deliveryInfo
+    ? { ...opts.deliveryInfo, ship_status: opts.deliveryInfo.ship_status ?? "PENDING" }
+    : null;
 
-  let lastErr: any = null;
-  for (const payload of tryPayloads) {
-    const { data, error } = await supabase.rpc("place_order", payload as any);
-    if (!error && data) {
-      // 若用最小參數成功，但這次真的有 delivery 欄位，補寫回 orders（不動 channel）
-      if (payload.p_delivery_info) {
-        await supabase
-          .from("orders")
-          .update({
-            delivery_info: payload.p_delivery_info ?? null,
-            delivery_fee: payload.p_delivery_fee ?? 0,
-          })
-          .eq("id", data as string);
-      }
-      return data as string;
-    }
-    lastErr = error;
-    const msg = (error?.message ?? "") + " " + (error?.hint ?? "");
-    if (!/PGRST203|could not choose the best candidate|function .* does not exist|column .* does not exist/i.test(msg)) {
-      break;
-    }
-  }
-  throw lastErr ?? new Error("place_order failed");
+  const { data, error } = await supabase.rpc("place_order", {
+    p_payment_method: paymentMethod,
+    p_items: items,
+    p_total: itemsTotal,
+    p_status: opts.status ?? status,
+    p_delivery_fee: opts.deliveryFee ?? 0,
+    p_delivery_info: info,              // ⬅ 門市請是 null；Delivery 才是 JSON
+    // 解除函式 overloading 歧義（若 DB 有此參數）
+    p_fail_when_insufficient: false,
+  });
+  if (error) throw error;
+  return data as string;
 }
 
-/** 便利函式：外送 */
+// 小幫手：Delivery 包裝
 export async function placeDelivery(
   items: PlaceOrderItem[],
   paymentMethod: string,
   info: DeliveryInfo,
-  deliveryFee: number = 0,
+  deliveryFee = 0,
   status: "ACTIVE" | "VOIDED" = "ACTIVE"
 ) {
   return placeOrder(items, paymentMethod, status, {
-    deliveryInfo: info,
+    deliveryInfo: { ...info, ship_status: info.ship_status ?? "PENDING" },
     deliveryFee,
   });
 }
 
-/** --------- 作廢（若 DB 有回補庫存則在函式內處理） --------- */
+// ---------- 作廢 ----------
 export async function voidOrderDB(orderId: string, opts?: { reason?: string; restock?: boolean }) {
   const res = await supabase.rpc("void_order", {
     p_order_id: orderId,
@@ -332,7 +253,5 @@ export async function voidOrderDB(orderId: string, opts?: { reason?: string; res
   if (res.error) throw res.error;
 }
 
-/** （保留接口）若需回補庫存可在 DB 端處理；這裡不做事 */
-export async function restockByOrder(_orderId: string) {
-  return;
-}
+// （預留）若需回補庫存可在此實作
+export async function restockByOrder(_orderId: string) { return; }
