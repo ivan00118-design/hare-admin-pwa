@@ -1,5 +1,12 @@
+// src/pages/SalesDashboard.tsx
 import React, { useCallback, useMemo, useRef, useState } from "react";
-import { useAppState, type Category, type DrinkSubKey, type UIItem } from "../context/AppState";
+import {
+  useAppState,
+  type Category,
+  type DrinkSubKey,
+  type UIItem,
+  type Inventory, // ✅ 需要把 setInventory 的目標型別引入
+} from "../context/AppState";
 import PosButton from "../components/PosButton.jsx";
 import {
   upsertProduct,
@@ -13,38 +20,78 @@ import iconSimplePay from "../assets/payments/SimplePay.jpg";
 import iconCash from "../assets/payments/Cash.png";
 import iconMacauPass from "../assets/payments/MacauPass.png";
 
+// --------- 可判別聯合 CartItem 型別 ---------
 type DrinkCartItem = UIItem & {
   category: "drinks";
   subKey: DrinkSubKey;
-  usagePerCup: number;
+  usagePerCup: number; // 每杯耗豆(kg)
   grams?: null;
   qty: number;
   deductKg?: number;
 };
+
 type BeanCartItem = UIItem & {
   category: "HandDrip";
   subKey?: null;
-  grams: number;
+  grams: number; // 包裝克數
   qty: number;
   deductKg?: number;
 };
+
 type CartItem = DrinkCartItem | BeanCartItem;
+// ------------------------------------------------
 
 const fmt = (n: number) => {
   const r = Math.round((n + Number.EPSILON) * 100) / 100;
   return Number.isInteger(r) ? String(r) : r.toFixed(2).replace(/0+$/, "").replace(/\.$/, "");
 };
-const genSku = () => (crypto?.randomUUID?.() ? crypto.randomUUID() : Math.random().toString(36).slice(2, 10));
+
+const genSku = () =>
+  (crypto?.randomUUID?.() ? crypto.randomUUID() : Math.random().toString(36).slice(2, 10));
+
+/** ✅ 將 rowsToUIInventory 的結果（UIInventory）轉成 AppState 期待的 Inventory */
+function uiToInventory(ui: any): Inventory {
+  const mapDrink = (list: any[] = []) =>
+    list.map((x) => ({
+      id: x.id ?? x.sku ?? "",
+      name: String(x.name ?? ""),
+      price: Number(x.price ?? 0),
+      usagePerCup: Number(x.usagePerCup ?? x.usage_per_cup ?? 0.02), // 必填，給預設
+      stock: Number(x.stock ?? x.stock_kg ?? 0),
+      unit: "kg" as const,
+    }));
+
+  const mapBean = (list: any[] = []) =>
+    list.map((x) => ({
+      id: x.id ?? x.sku ?? "",
+      name: String(x.name ?? ""),
+      price: Number(x.price ?? 0),
+      grams: Number(x.grams ?? 0),
+      stock: Number(x.stock ?? x.stock_kg ?? 0),
+      unit: "kg" as const,
+    }));
+
+  return {
+    store: {
+      drinks: {
+        espresso: mapDrink(ui?.store?.drinks?.espresso),
+        singleOrigin: mapDrink(ui?.store?.drinks?.singleOrigin),
+      },
+      HandDrip: mapBean(ui?.store?.HandDrip),
+    },
+  };
+}
 
 export default function SalesDashboard() {
   const { inventory, setInventory, createOrder } = useAppState();
 
-  // 以 DB v_inventory 重新拉資料 → 映射成 UI inventory
+  // 以 DB v_inventory 重新拉資料 → 映射成 UI inventory → 轉成 AppState.Inventory
   const refreshInventory = useCallback(async () => {
     try {
       const rows = await fetchInventoryRows();
       const ui = rowsToUIInventory(rows);
-      await setInventory(ui);
+      const inv = uiToInventory(ui);          // ✅ 轉型
+      await setInventory(inv);                // ✅ 符合 setInventory 目標型別
     } catch (e) {
       console.error("[refreshInventory] failed:", e);
     }
@@ -55,20 +102,23 @@ export default function SalesDashboard() {
   const [cart, setCart] = useState<CartItem[]>([]);
   const [editMode, setEditMode] = useState(false);
   const [paymentMethod, setPaymentMethod] = useState("");
-  const [migratingSku, setMigratingSku] = useState<string | null>(null);
+  const [migratingSku, setMigratingSku] = useState<string | null>(null); // Beans 變更克數時避免重複操作
 
   const PAYMENT_OPTIONS = [
     { key: "SimplePay", label: "SimplePay", icon: iconSimplePay },
     { key: "Cash", label: "Cash", icon: iconCash },
     { key: "MacauPass", label: "MacauPass", icon: iconMacauPass },
-    { key: "QR", label: "QR", icon: null as any },
+    { key: "QR", label: "QR", icon: null as any }, // 新增 QR 選項
   ] as const;
 
-  // 依 tab 取商品
+  // 依目前 tab 取得商品清單
   const drinks = (inventory?.store?.drinks || { espresso: [], singleOrigin: [] }) as any;
-  const products: any[] = activeTab === "drinks" ? (drinks as any)[drinkSubTab] || [] : (inventory?.store?.HandDrip || []);
+  const products: any[] =
+    activeTab === "drinks"
+      ? ((drinks as any)[drinkSubTab] || [])
+      : (inventory?.store?.HandDrip || []);
 
-  // Beans 分組
+  // Beans 分組（同品名不同克數）
   const beanGroups = useMemo(() => {
     if (activeTab === "drinks") return [] as Array<[string, any[]]>;
     const map = new Map<string, any[]>();
@@ -79,46 +129,77 @@ export default function SalesDashboard() {
     }
     return Array.from(map.entries()).map(([name, variants]) => [
       name,
-      (variants as any[]).filter((v) => Number.isFinite(Number((v as any).grams))).sort((a: any, b: any) => (a.grams || 0) - (b.grams || 0)),
+      (variants as any[])
+        .filter((v) => Number.isFinite(Number((v as any).grams)))
+        .sort((a: any, b: any) => (a.grams || 0) - (b.grams || 0)),
     ]) as Array<[string, any[]]>;
   }, [activeTab, products]);
 
   const addGuardRef = useRef(new Set<string>());
-  const nameInputCls = "w-full border border-[#dc2626] rounded px-3 py-2 h-11 leading-6 text-base text-left";
-  const cellInputCls = "w-full sm:max-w-[110px] mx-auto border border-[#dc2626] rounded px-3 py-2 h-11 leading-6 text-base text-left md:text-center";
+  const nameInputCls =
+    "w-full border border-[#dc2626] rounded px-3 py-2 h-11 leading-6 text-base text-left";
+  const cellInputCls =
+    "w-full sm:max-w-[110px] mx-auto border border-[#dc2626] rounded px-3 py-2 h-11 leading-6 text-base text-left md:text-center";
 
-  // 新增商品暫存
-  const [newProduct, setNewProduct] = useState<any>({ name: "", price: 0, usagePerCup: 0.02, grams: 250 });
+  // 新增商品用
+  const [newProduct, setNewProduct] = useState<any>({
+    name: "",
+    price: 0,
+    usagePerCup: 0.02, // drinks 用
+    grams: 250,        // beans 用
+  });
 
-  // 本地同步 UI
-  const patchLocalItem = (category: Category, subKey: DrinkSubKey | null, id: string, partial: Record<string, any>) => {
+  // ========= 編輯模式：本地先改，RPC 持久化 =========
+
+  /** 共用：本地同步 UI（不落 DB；僅讓使用者編輯時不跳回） */
+  const patchLocalItem = (
+    category: Category,
+    subKey: DrinkSubKey | null,
+    id: string,
+    partial: Record<string, any>
+  ) => {
     setInventory((prev) => {
-      const next = typeof structuredClone === "function" ? structuredClone(prev) : JSON.parse(JSON.stringify(prev));
+      const next =
+        typeof structuredClone === "function"
+          ? structuredClone(prev)
+          : JSON.parse(JSON.stringify(prev));
       if (category === "drinks" && subKey) {
-        next.store.drinks[subKey] = (next.store.drinks[subKey] || []).map((it: any) => (it.id === id ? { ...it, ...partial } : it));
+        next.store.drinks[subKey] = (next.store.drinks[subKey] || []).map((it: any) =>
+          it.id === id ? { ...it, ...partial } : it
+        );
       } else {
-        next.store.HandDrip = (next.store.HandDrip || []).map((it: any) => (it.id === id ? { ...it, ...partial } : it));
+        next.store.HandDrip = (next.store.HandDrip || []).map((it: any) =>
+          it.id === id ? { ...it, ...partial } : it
+        );
       }
       return next;
     });
   };
 
-  // Drinks：改欄位 → upsert_product
-  const saveDrinkField = async (it: any, subKey: DrinkSubKey, field: "price" | "usagePerCup" | "name", raw: string) => {
+  /** Drinks：變更 price / usagePerCup / name → upsert_product */
+  const saveDrinkField = async (
+    it: any,
+    subKey: DrinkSubKey,
+    field: "price" | "usagePerCup" | "name",
+    raw: string
+  ) => {
     const value = field === "name" ? raw : parseFloat(raw) || 0;
+    // 先本地更新
     patchLocalItem("drinks", subKey, it.id, { [field]: value });
+    // 再 RPC 持久化
     await upsertProduct({
-      sku: it.id,
+      sku: it.id, // id 即 sku
       name: field === "name" ? String(value) : it.name,
       category: "drinks",
       sub_key: subKey,
       usage_per_cup: field === "usagePerCup" ? Number(value) : Number(it.usagePerCup ?? 0.02),
       price: field === "price" ? Number(value) : Number(it.price ?? 0),
     });
+    // 與 DB 對齊
     await refreshInventory();
   };
 
-  // Beans：改價/改名 → upsert_product
+  /** Beans：變更 price / name（grams 透過安全流程改） */
   const saveBeanField = async (it: any, field: "price" | "name", raw: string) => {
     const value = field === "name" ? raw : parseFloat(raw) || 0;
     patchLocalItem("HandDrip", null, it.id, { [field]: value });
@@ -132,22 +213,26 @@ export default function SalesDashboard() {
     await refreshInventory();
   };
 
-  // 刪除
+  /** 刪除商品（變體） */
   const handleDelete = async (category: Category, subKey: DrinkSubKey | null, id: string) => {
-    await deleteProduct(id);
+    await deleteProduct(id); // id 即 sku
     await refreshInventory();
   };
 
-  // 新增
+  /** 新增商品：建立新 SKU → upsert_product → reload */
   const handleAddProduct = async (e?: React.SyntheticEvent) => {
     e?.preventDefault?.();
     const name = (newProduct.name || "").trim();
     if (!name) return alert("請輸入商品名稱");
 
-    const uniq = activeTab === "drinks" ? `d|${drinkSubTab}|${name.toLowerCase()}` : `b|${name.toLowerCase()}|${Number(newProduct.grams || 0)}`;
-    if (addGuardRef.current.has(uniq)) return;
-    addGuardRef.current.add(uniq);
-    setTimeout(() => addGuardRef.current.delete(uniq), 800);
+    // 防連點
+    const uniqKey =
+      activeTab === "drinks"
+        ? `d|${drinkSubTab}|${name.toLowerCase()}`
+        : `b|${name.toLowerCase()}|${Number(newProduct.grams || 0)}`;
+    if (addGuardRef.current.has(uniqKey)) return;
+    addGuardRef.current.add(uniqKey);
+    setTimeout(() => addGuardRef.current.delete(uniqKey), 800);
 
     if (activeTab === "drinks") {
       const sku = `${genSku()}-${drinkSubTab}`;
@@ -171,19 +256,21 @@ export default function SalesDashboard() {
         price: Number(newProduct.price) || 0,
       });
     }
+
     await refreshInventory();
     setNewProduct({ name: "", price: 0, usagePerCup: 0.02, grams: 250 });
   };
 
-  // Beans 安全變更克數
+  /** Beans：下拉選擇新克數 → 安全變更（新 SKU、搬庫存、刪舊 SKU） */
   const handleChangeBeanGramsSelect = async (item: any, newGrams: number) => {
     const oldGrams = Number(item.grams) || 0;
     if (!Number.isFinite(newGrams) || newGrams <= 0 || newGrams === oldGrams) return;
+
     const ok = window.confirm(`將「${item.name}」由 ${oldGrams}g → ${newGrams}g？\n（會建立新 SKU、搬移庫存、刪舊 SKU）`);
     if (!ok) return;
 
     try {
-      setMigratingSku(item.id);
+      setMigratingSku(item.id); // id 即 sku
       const newSku = await changeBeanPackSizeSafe({
         oldSku: item.id,
         oldStockKg: Number(item.stock) || 0,
@@ -201,28 +288,49 @@ export default function SalesDashboard() {
     }
   };
 
-  // 購物車 / 下單
+  // ========= 購物車 / 下單 =========
+
   const addToCart = (item: any, qty: number, grams: number | null = null) => {
     const parsed = Number(qty);
     if (!Number.isFinite(parsed) || parsed <= 0) return;
+
     const isDrink = activeTab === "drinks";
     const g = isDrink ? 0 : Number(grams ?? item.grams ?? 0);
     const usage = isDrink ? Number(item.usagePerCup ?? 0.02) : 0;
     const deductKg = isDrink ? parsed * usage : (g * parsed) / 1000;
 
-    setCart((prev) => {
+    setCart((prev: CartItem[]) => {
       const key = `${isDrink ? "drinks" : "HandDrip"}|${isDrink ? drinkSubTab : ""}|${item.id}|${g}`;
-      const existed = prev.find((p) => `${p.category}|${p.subKey || ""}|${p.id}|${(p as BeanCartItem).grams || 0}` === key);
+      const existed = prev.find(
+        (p) => `${p.category}|${p.subKey || ""}|${p.id}|${(p as BeanCartItem).grams || 0}` === key
+      );
       if (existed) {
-        return prev.map((p) =>
+        return prev.map((p: CartItem) =>
           `${p.category}|${p.subKey || ""}|${p.id}|${(p as BeanCartItem).grams || 0}` === key
             ? { ...p, qty: p.qty + parsed, deductKg: (p.deductKg || 0) + deductKg }
             : p
         );
       }
+
       const patch: CartItem = isDrink
-        ? { ...(item as UIItem), category: "drinks", subKey: drinkSubTab, usagePerCup: usage, grams: null, qty: parsed, deductKg }
-        : { ...(item as UIItem), category: "HandDrip", subKey: null, grams: g, qty: parsed, deductKg };
+        ? {
+            ...(item as UIItem),
+            category: "drinks",
+            subKey: drinkSubTab,
+            usagePerCup: usage,
+            grams: null,
+            qty: parsed,
+            deductKg,
+          }
+        : {
+            ...(item as UIItem),
+            category: "HandDrip",
+            subKey: null,
+            grams: g,
+            qty: parsed,
+            deductKg,
+          };
+
       return [...prev, patch];
     });
   };
@@ -237,7 +345,11 @@ export default function SalesDashboard() {
           if (k !== key) return p;
           const newQty = p.qty + delta;
           if (newQty <= 0) return null as unknown as CartItem;
-          const per = p.category === "drinks" ? (p as DrinkCartItem).usagePerCup : (p as BeanCartItem).grams / 1000;
+
+          const per = p.category === "drinks"
+            ? (p as DrinkCartItem).usagePerCup
+            : ((p as BeanCartItem).grams / 1000);
+
           return { ...p, qty: newQty, deductKg: per * newQty };
         })
         .filter(Boolean) as CartItem[]
@@ -253,10 +365,10 @@ export default function SalesDashboard() {
     setPaymentMethod("");
   };
 
-  // UI
+  // ========= UI =========
   return (
     <div className="p-6 bg-gray-50 min-h-screen">
-      {/* 編輯切換 */}
+      {/* 編輯模式切換 */}
       <div className="flex justify-end items-center mb-6">
         <PosButton variant="tab" selected={editMode} onClick={() => setEditMode(!editMode)} aria-pressed={editMode}>
           ✏️
@@ -291,11 +403,15 @@ export default function SalesDashboard() {
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
-        {/* 左清單 */}
+        {/* 左側清單 */}
         <div className="lg:col-span-5 min-w-0">
           <div className="bg-white shadow-xl rounded-xl p-4 border border-gray-200 h-full min-h-[420px] flex flex-col">
             <h2 className="text-xl font-extrabold text-black mb-3">
-              {activeTab === "drinks" ? (drinkSubTab === "espresso" ? "Espresso Menu" : "Single Origin Menu") : "Coffee Beans Menu"}
+              {activeTab === "drinks"
+                ? drinkSubTab === "espresso"
+                  ? "Espresso Menu"
+                  : "Single Origin Menu"
+                : "Coffee Beans Menu"}
             </h2>
 
             {!editMode ? (
@@ -310,7 +426,11 @@ export default function SalesDashboard() {
                   <tbody>
                     {activeTab === "drinks"
                       ? (products as any[]).map((item: any) => (
-                          <tr key={item.id} className="border-t border-gray-200 hover:bg-red-50 cursor-pointer" onClick={() => addToCart(item, 1)}>
+                          <tr
+                            key={item.id}
+                            className="border-t border-gray-200 hover:bg-red-50 cursor-pointer"
+                            onClick={() => addToCart(item, 1)}
+                          >
                             <td className="px-4 py-3">
                               <div className="font-semibold break-words">{item.name}</div>
                               <div className="text-xs text-gray-500 mt-1">{fmt(item.price)}</div>
@@ -325,7 +445,13 @@ export default function SalesDashboard() {
                             <td className="px-4 py-3">
                               <div className="flex flex-wrap gap-2 justify-end">
                                 {variants.map((v: any) => (
-                                  <PosButton key={`${name}-${v.grams}`} variant="red" className="px-2 py-1 text-xs" onClick={() => addToCart(v, 1, v.grams)} title={`${v.grams}g • ${fmt(v.price)}`}>
+                                  <PosButton
+                                    key={`${name}-${v.grams}`}
+                                    variant="red"
+                                    className="px-2 py-1 text-xs"
+                                    onClick={() => addToCart(v, 1, v.grams)}
+                                    title={`${v.grams}g • ${fmt(v.price)}`}
+                                  >
                                     {v.grams}g • {fmt(v.price)}
                                   </PosButton>
                                 ))}
@@ -385,23 +511,27 @@ export default function SalesDashboard() {
                           />
                         </td>
 
-                        {/* usage / grams */}
+                        {/* Usage / Grams */}
                         <td className="px-3 py-2 text-center">
                           {activeTab === "drinks" ? (
                             <input
                               type="number"
                               step="0.001"
                               defaultValue={item.usagePerCup || 0.02}
-                              onBlur={(e) => saveDrinkField(item, drinkSubTab, "usagePerCup", e.target.value)}
+                              onBlur={(e) =>
+                                saveDrinkField(item, drinkSubTab, "usagePerCup", e.target.value)
+                              }
                               className={cellInputCls}
                             />
                           ) : (
                             <select
                               value={item.grams || 0}
                               disabled={migratingSku === item.id}
-                              onChange={(e) => handleChangeBeanGramsSelect(item, parseInt(e.target.value, 10))}
+                              onChange={(e) =>
+                                handleChangeBeanGramsSelect(item, parseInt(e.target.value, 10))
+                              }
                               className={cellInputCls}
-                              title="選擇新的包裝克數（會建立新 SKU、搬移庫存、刪舊 SKU）"
+                              title="選擇新的包裝克數（會建立新 SKU、搬移庫存、刪除舊 SKU）"
                             >
                               {[100, 250, 500, 1000].map((g) => (
                                 <option key={g} value={g}>
@@ -445,7 +575,9 @@ export default function SalesDashboard() {
                           step="1"
                           placeholder="Price"
                           value={newProduct.price}
-                          onChange={(e) => setNewProduct((p: any) => ({ ...p, price: parseFloat(e.target.value) || 0 }))}
+                          onChange={(e) =>
+                            setNewProduct((p: any) => ({ ...p, price: parseFloat(e.target.value) || 0 }))
+                          }
                           onKeyDown={(e) => e.key === "Enter" && handleAddProduct(e)}
                           className={cellInputCls}
                         />
@@ -457,14 +589,18 @@ export default function SalesDashboard() {
                             step="0.001"
                             placeholder="Usage (kg)"
                             value={newProduct.usagePerCup}
-                            onChange={(e) => setNewProduct((p: any) => ({ ...p, usagePerCup: parseFloat(e.target.value) || 0 }))}
+                            onChange={(e) =>
+                              setNewProduct((p: any) => ({ ...p, usagePerCup: parseFloat(e.target.value) || 0 }))
+                            }
                             onKeyDown={(e) => e.key === "Enter" && handleAddProduct(e)}
                             className={cellInputCls}
                           />
                         ) : (
                           <select
                             value={newProduct.grams}
-                            onChange={(e) => setNewProduct((p: any) => ({ ...p, grams: parseInt(e.target.value, 10) }))}
+                            onChange={(e) =>
+                              setNewProduct((p: any) => ({ ...p, grams: parseInt(e.target.value, 10) }))
+                            }
                             className={cellInputCls}
                           >
                             <option value={100}>100g</option>
@@ -487,7 +623,7 @@ export default function SalesDashboard() {
           </div>
         </div>
 
-        {/* 右摘要 */}
+        {/* 右側訂單摘要 */}
         <div className="lg:col-span-7 min-w-0">
           <div className="bg-white shadow-xl rounded-xl p-4 border border-gray-200 h-full min-h-[420px] flex flex-col">
             <h2 className="text-xl font-extrabold text-black mb-3">Order Summary</h2>
@@ -524,11 +660,19 @@ export default function SalesDashboard() {
                           </td>
                           <td className="px-4 py-3 text-center">
                             <div className="inline-flex items-center gap-2 justify-center">
-                              <PosButton variant="black" className="px-2 py-1 text-xs !text-black" onClick={() => changeCartQty(key, -1)}>
+                              <PosButton
+                                variant="black"
+                                className="px-2 py-1 text-xs !text-black hover:!text-black focus:!text-black"
+                                onClick={() => changeCartQty(key, -1)}
+                              >
                                 −
                               </PosButton>
                               <span className="inline-block min-w-[2rem] text-center">{item.qty}</span>
-                              <PosButton variant="black" className="px-2 py-1 text-xs !text-black" onClick={() => changeCartQty(key, +1)}>
+                              <PosButton
+                                variant="black"
+                                className="px-2 py-1 text-xs !text-black hover:!text-black focus:!text-black"
+                                onClick={() => changeCartQty(key, +1)}
+                              >
                                 ＋
                               </PosButton>
                             </div>
@@ -544,8 +688,8 @@ export default function SalesDashboard() {
               </div>
             )}
 
-            {/* 付款 + 結帳 */}
-            <div className="mt-6 border-t pt-4">
+            {/* 付款方式 + 結帳 */}
+            <div className="mt-6 border-top pt-4">
               <div className="mb-3">
                 <div className="mb-2 text-sm font-semibold text-gray-700">Payment</div>
                 <div className="flex flex-wrap gap-3">

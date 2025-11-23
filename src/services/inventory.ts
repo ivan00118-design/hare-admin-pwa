@@ -1,7 +1,7 @@
 // src/services/inventory.ts
 import { supabase } from "../supabaseClient";
 
-/** DB rows (v_inventory) */
+/** 直接從 v_inventory 取回的列 */
 export type InventoryRow = {
   sku: string;
   name: string;
@@ -9,22 +9,78 @@ export type InventoryRow = {
   sub_key: "espresso" | "singleOrigin" | null;
   grams: number | null;
   usage_per_cup: number | null;
-  price: number;
-  stock_kg: number;
+  price: number | null;
+  stock_kg: number | null;
 };
 
-/** 讀取 v_inventory */
+/** 前端 UI 期望的結構（與 AppState 相容） */
+export type UIItem = {
+  id: string;
+  name: string;
+  price: number;
+  stock: number;
+  unit: "kg";
+  // drinks only
+  usagePerCup?: number;
+  // beans only
+  grams?: number;
+};
+
+export type UIInventory = {
+  store: {
+    drinks: {
+      espresso: UIItem[];
+      singleOrigin: UIItem[];
+    };
+    HandDrip: UIItem[];
+  };
+};
+
+/** 讀 v_inventory */
 export async function fetchInventoryRows(): Promise<InventoryRow[]> {
   const { data, error } = await supabase
     .from("v_inventory")
-    .select("*")
+    .select("sku,name,category,sub_key,grams,usage_per_cup,price,stock_kg")
     .order("name", { ascending: true });
+
   if (error) throw error;
-  return (data ?? []) as InventoryRow[];
+  return (data || []) as InventoryRow[];
 }
 
-/** 上/改品項：統一呼叫 upsert_product_unified（避免 PGRST203） */
-export async function upsertProduct(args: {
+/** rows -> UIInventory（與 AppState 兼容） */
+export function rowsToUIInventory(rows: InventoryRow[]): UIInventory {
+  const espresso: UIItem[] = [];
+  const singleOrigin: UIItem[] = [];
+  const beans: UIItem[] = [];
+
+  for (const r of rows) {
+    if (r.category === "drinks") {
+      const item: UIItem = {
+        id: r.sku,
+        name: r.name,
+        price: Number(r.price ?? 0),
+        stock: Number(r.stock_kg ?? 0),
+        unit: "kg",
+        usagePerCup: Number(r.usage_per_cup ?? 0.02),
+      };
+      if (r.sub_key === "espresso") espresso.push(item);
+      else singleOrigin.push(item);
+    } else {
+      beans.push({
+        id: r.sku,
+        name: r.name,
+        price: Number(r.price ?? 0),
+        grams: Number(r.grams ?? 0),
+        stock: Number(r.stock_kg ?? 0),
+        unit: "kg",
+      });
+    }
+  }
+  return { store: { drinks: { espresso, singleOrigin }, HandDrip: beans } };
+}
+
+/** 新增/更新商品（單一 RPC，避免 overload） */
+export async function upsertProduct(input: {
   sku: string;
   name: string;
   category: "drinks" | "HandDrip";
@@ -34,66 +90,49 @@ export async function upsertProduct(args: {
   price: number;
 }): Promise<string> {
   const { data, error } = await supabase.rpc("upsert_product_unified", {
-    p_sku: args.sku,
-    p_name: args.name,
-    p_category: args.category,
-    p_sub_key: args.sub_key ?? null,
-    p_grams: args.grams ?? null,
-    p_usage_per_cup: args.usage_per_cup ?? null,
-    p_price: args.price ?? 0,
+    p_sku: input.sku,
+    p_name: input.name,
+    p_category: input.category,
+    p_sub_key: input.sub_key ?? null,
+    p_grams: input.grams ?? null,
+    p_usage_per_cup: input.usage_per_cup ?? null,
+    p_price: input.price,
   });
   if (error) throw error;
-  return data as string;
+  return (data as string) ?? input.sku;
 }
 
-/** 刪除單一 SKU */
+/** 刪除商品（直接刪 products.sku） */
 export async function deleteProduct(sku: string): Promise<void> {
-  const { error } = await supabase.rpc("delete_product", { p_sku: sku });
+  const { error } = await supabase.from("products").delete().eq("sku", sku);
   if (error) throw error;
 }
 
-/** Beans 換包裝克數（安全流程） */
+/** Beans 改克數（使用 v2，若不存在再退回舊名） */
 export async function changeBeanPackSizeSafe(args: {
   oldSku: string;
   name: string;
   price: number;
-  oldStockKg?: number; // 可選，DB 端會沿用舊 SKU 的 stock_kg
+  oldStockKg: number;
   newGrams: number;
 }): Promise<string> {
-  const { data, error } = await supabase.rpc("change_bean_pack_size_safe", {
+  let res = await supabase.rpc("change_bean_pack_size_safe_v2", {
     p_old_sku: args.oldSku,
     p_name: args.name,
     p_price: args.price,
-    p_old_stock_kg: args.oldStockKg ?? 0,
+    p_old_stock_kg: args.oldStockKg,
     p_new_grams: args.newGrams,
   });
-  if (error) throw error;
-  return data as string; // 回傳 new SKU
-}
-
-/** 若你需要把 DB rows 轉成 UI inventory，可在這裡做（選用） */
-export function rowsToUIInventory(rows: InventoryRow[]) {
-  // 依你 AppState 設計自行映射；這裡回傳簡單分組供參考
-  const drinks = {
-    espresso: [] as any[],
-    singleOrigin: [] as any[],
-  };
-  const HandDrip: any[] = [];
-
-  for (const r of rows) {
-    const base = {
-      id: r.sku,
-      name: r.name,
-      price: Number(r.price) || 0,
-      stock: Number(r.stock_kg) || 0,
-    };
-    if (r.category === "drinks") {
-      const it = { ...base, usagePerCup: Number(r.usage_per_cup) || 0.02 };
-      if (r.sub_key === "espresso") drinks.espresso.push(it);
-      else drinks.singleOrigin.push(it);
-    } else {
-      HandDrip.push({ ...base, grams: r.grams || 0 });
-    }
+  if (res.error && res.error.code === "PGRST116") {
+    // 若 v2 不存在，退回舊名（但前面 SQL 已清理 overload）
+    res = await supabase.rpc("change_bean_pack_size_safe", {
+      p_old_sku: args.oldSku,
+      p_name: args.name,
+      p_price: args.price,
+      p_old_stock_kg: args.oldStockKg,
+      p_new_grams: args.newGrams,
+    });
   }
-  return { store: { drinks, HandDrip } };
+  if (res.error) throw res.error;
+  return (res.data as string) ?? "";
 }
