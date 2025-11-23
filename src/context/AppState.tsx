@@ -13,14 +13,12 @@ import {
   fetchOrders,
   placeOrder,
   voidOrderDB,
-  restockByOrder,
   type PlaceOrderItem,
 } from "../services/orders";
 
 import {
   fetchInventoryRows,
   rowsToUIInventory,
-  type UIInventory as DBUIInventory,
 } from "../services/inventory";
 
 // ====== 型別 ======
@@ -187,7 +185,7 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
   // ---- 由 DB 讀取 Inventory（不再使用 app_state） ----
   const reloadInventory = useCallback(async () => {
     const rows = await fetchInventoryRows();
-    const ui: DBUIInventory = rowsToUIInventory(rows);
+    const ui = rowsToUIInventory(rows);
     // 對齊舊 UI 型別
     const normalized: Inventory = {
       store: {
@@ -321,13 +319,10 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
     [reloadOrders]
   );
 
-  // 作廢（DB）
+  // 作廢（DB）— 直接把 restock 交給 voidOrderDB（不再依賴 restockByOrder）
   const voidOrder = useCallback(
     async (orderId: string, opt?: { restock?: boolean; reason?: string }) => {
-      await voidOrderDB(orderId, { reason: opt?.reason });
-      if (opt?.restock) {
-        try { await restockByOrder(orderId); } catch {}
-      }
+      await voidOrderDB(orderId, { reason: opt?.reason, restock: !!opt?.restock });
       await reloadOrders();
     },
     [reloadOrders]
