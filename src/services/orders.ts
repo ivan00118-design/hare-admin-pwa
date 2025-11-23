@@ -7,13 +7,13 @@ export type DrinkSubKey = "espresso" | "singleOrigin";
 export type ShipStatus = "PENDING" | "CLOSED";
 
 export type PlaceOrderItem = {
-  name: string;
   sku: string;
+  name: string;
+  category: "drinks" | "HandDrip";
+  sub_key?: "espresso" | "singleOrigin";
+  grams?: number;   // beans 用
   qty: number;
   price: number;
-  category: Category;
-  sub_key?: DrinkSubKey | null;
-  grams?: number | null;
 };
 
 export type ShippingRow = {
