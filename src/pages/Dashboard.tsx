@@ -24,7 +24,7 @@ const todayKey = () => dateKey(new Date());
 export default function Dashboard() {
   const [picked, setPicked] = useState(todayKey());
 
-  // 從 Supabase 載入資料（抓「選取日的前3天 ~ 選取日」且只取未作廢）
+  // Supabase 抓「選取日的前3天 ~ 選取日」、僅取未作廢
   const [rows, setRows] = useState<any[]>([]);
   const [loading, setLoading] = useState(false);
 
@@ -49,29 +49,29 @@ export default function Dashboard() {
       .finally(() => setLoading(false));
   }, [picked]);
 
-  // 取有效訂單（雙保險）
+  // 有效訂單（保險：再排除 voided）
   const validOrders = useMemo(() => rows.filter((o: any) => !o?.voided), [rows]);
+
+  // 當日訂單
   const ordersOfDay = useMemo(
     () => validOrders.filter((o: any) => dateKey(o.createdAt) === picked),
     [validOrders, picked]
   );
 
-  // ✅ 外送判斷（更嚴謹）
-  // 只有具備明確 delivery 訊號才視為外送：
-  // - isDelivery / is_delivery === true
-  // - deliveryFee / delivery_fee > 0
-  // - 存在 delivery / delivery_info JSON
-  // - channel==='DELIVERY' 只有在同時具備上列任一訊號時才算（避免誤標）
-  const isDeliveryOrder = (o: any): boolean => {
-    if (typeof o?.isDelivery === "boolean") return o.isDelivery;
-    if (typeof o?.is_delivery === "boolean") return o.is_delivery;
-
-    const fee = Number(o?.deliveryFee ?? o?.delivery_fee ?? 0);
-    const hasDeliveryObj = !!(o?.delivery || o?.delivery_info);
-
-    if (fee > 0 || hasDeliveryObj) return true;
-    if (o?.channel === "DELIVERY" && (fee > 0 || hasDeliveryObj)) return true;
-
+  /**
+   * ✅ 外送判斷（修正重點）
+   * 僅以「正向訊號」判斷外送：
+   *  1) o.isDelivery === true
+   *  2) o.deliveryFee > 0
+   *  3) 有 delivery / delivery_info / deliveryInfo 內容
+   * 其餘一律視為「門市單」；不再依賴 o.channel，避免資料層誤設時被歸到 Delivery Revenue。
+   */
+  const isDeliveryOrder = (o: any) => {
+    if (o?.isDelivery === true) return true;
+    if (typeof o?.isDelivery === "boolean" && o.isDelivery === false) return false; // 顯示標 false 就尊重
+    if (Number(o?.deliveryFee) > 0) return true;
+    const d = (o as any).delivery ?? (o as any).delivery_info ?? (o as any).deliveryInfo;
+    if (d && typeof d === "object" && Object.keys(d).length > 0) return true;
     return false;
   };
 
@@ -107,7 +107,7 @@ export default function Dashboard() {
   const paymentTotals = useMemo(() => {
     const map = new Map<string, number>();
     for (const o of ordersOfDay as any[]) {
-      const k = o?.paymentMethod ?? o?.payment_method ?? "—";
+      const k = o?.paymentMethod || "—";
       map.set(k, (map.get(k) || 0) + (Number(o?.total) || 0));
     }
     return Array.from(map.entries()).sort((a, b) => b[1] - a[1]);
@@ -149,10 +149,14 @@ export default function Dashboard() {
       if (!days.includes(k)) continue;
       group.set(k, {
         revenue: (group.get(k)?.revenue || 0) + (Number(o.total) || 0),
-        count: (group.get(k)?.count || 0) + 1
+        count: (group.get(k)?.count || 0) + 1,
       });
     }
-    return days.map((k) => ({ day: k, revenue: group.get(k)?.revenue || 0, count: group.get(k)?.count || 0 }));
+    return days.map((k) => ({
+      day: k,
+      revenue: group.get(k)?.revenue || 0,
+      count: group.get(k)?.count || 0,
+    }));
   }, [validOrders, picked]);
 
   // 交班訊息
@@ -186,7 +190,9 @@ export default function Dashboard() {
     const text = buildShiftSummary();
     try { await navigator.clipboard.writeText(text); } catch {}
     const to = String(WHATSAPP_PHONE || "").replace(/[^\d]/g, "");
-    const url = to ? `https://wa.me/${to}?text=${encodeURIComponent(text)}` : `https://wa.me/?text=${encodeURIComponent(text)}`;
+    const url = to
+      ? `https://wa.me/${to}?text=${encodeURIComponent(text)}`
+      : `https://wa.me/?text=${encodeURIComponent(text)}`;
     window.open(url, "_blank", "noopener,noreferrer");
   };
 
