@@ -145,11 +145,10 @@ function dedupeInventory(inv: Inventory): Inventory {
       const key = keyOf("drinks", k, it);
       const kept = pick.get(key);
       if (!kept) pick.set(key, it);
-      else
-        pick.set(
-          key,
-          (Number(it.stock) || 0) < (Number(kept.stock) || 0) ? it : kept
-        );
+      else pick.set(
+        key,
+        (Number(it.stock) || 0) < (Number(kept.stock) || 0) ? it : kept
+      );
     }
     for (const v of pick.values()) arr.push(v);
     next.store.drinks[k] = arr;
@@ -162,16 +161,27 @@ function dedupeInventory(inv: Inventory): Inventory {
     const key = keyOf("HandDrip", null, it);
     const kept = pick.get(key);
     if (!kept) pick.set(key, it);
-    else
-      pick.set(
-        key,
-        (Number(it.stock) || 0) < (Number(kept.stock) || 0) ? it : kept
-      );
+    else pick.set(
+      key,
+      (Number(it.stock) || 0) < (Number(kept.stock) || 0) ? it : kept
+    );
   }
   for (const v of pick.values()) beans.push(v);
   next.store.HandDrip = beans;
 
   return next;
+}
+
+// ====== 本地 fallback：嘗試呼叫 DB 的 restock_by_order RPC（若無則忽略） ======
+async function tryRestockByOrder(orderId: string): Promise<void> {
+  try {
+    const { error } = await supabase.rpc("restock_by_order", {
+      p_order_id: orderId,
+    });
+    if (error) throw error;
+  } catch {
+    // 若沒有此 RPC 或權限不足，忽略即可（避免前端報錯）
+  }
 }
 
 // ====== Provider ======
@@ -185,7 +195,7 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
   // ---- 由 DB 讀取 Inventory（不再使用 app_state） ----
   const reloadInventory = useCallback(async () => {
     const rows = await fetchInventoryRows();
-    const ui = rowsToUIInventory(rows);
+    const ui = rowsToUIInventory(rows); // 型別交由推論，不依賴外部別名
     // 對齊舊 UI 型別
     const normalized: Inventory = {
       store: {
@@ -319,10 +329,13 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
     [reloadOrders]
   );
 
-  // 作廢（DB）— 直接把 restock 交給 voidOrderDB（不再依賴 restockByOrder）
+  // 作廢（DB）
   const voidOrder = useCallback(
     async (orderId: string, opt?: { restock?: boolean; reason?: string }) => {
-      await voidOrderDB(orderId, { reason: opt?.reason, restock: !!opt?.restock });
+      await voidOrderDB(orderId, { reason: opt?.reason });
+      if (opt?.restock) {
+        await tryRestockByOrder(orderId); // 本地 fallback；有 RPC 則會執行，否則忽略
+      }
       await reloadOrders();
     },
     [reloadOrders]
