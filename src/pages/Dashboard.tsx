@@ -43,24 +43,37 @@ export default function Dashboard() {
       to,
       status: "active", // 只取未作廢
       page: 0,
-      pageSize: 1000, // 視需求調整
+      pageSize: 1000,
     })
       .then((res) => setRows(res.rows || []))
       .finally(() => setLoading(false));
   }, [picked]);
 
-  // 本頁使用的有效訂單（fetchOrders 已過濾 active；這裡保險再排除一次）
+  // 取有效訂單（雙保險）
   const validOrders = useMemo(() => rows.filter((o: any) => !o?.voided), [rows]);
   const ordersOfDay = useMemo(
     () => validOrders.filter((o: any) => dateKey(o.createdAt) === picked),
     [validOrders, picked]
   );
 
-  // 外送訂單判斷：之後若你在 DB 增加欄位（如 orders.is_delivery 或 delivery json），這裡即會生效
-  const isDeliveryOrder = (o: any) =>
-    typeof o?.isDelivery === "boolean"
-      ? o.isDelivery
-      : (o?.channel === "DELIVERY");
+  // ✅ 外送判斷（更嚴謹）
+  // 只有具備明確 delivery 訊號才視為外送：
+  // - isDelivery / is_delivery === true
+  // - deliveryFee / delivery_fee > 0
+  // - 存在 delivery / delivery_info JSON
+  // - channel==='DELIVERY' 只有在同時具備上列任一訊號時才算（避免誤標）
+  const isDeliveryOrder = (o: any): boolean => {
+    if (typeof o?.isDelivery === "boolean") return o.isDelivery;
+    if (typeof o?.is_delivery === "boolean") return o.is_delivery;
+
+    const fee = Number(o?.deliveryFee ?? o?.delivery_fee ?? 0);
+    const hasDeliveryObj = !!(o?.delivery || o?.delivery_info);
+
+    if (fee > 0 || hasDeliveryObj) return true;
+    if (o?.channel === "DELIVERY" && (fee > 0 || hasDeliveryObj)) return true;
+
+    return false;
+  };
 
   // 拆分營收 + 計數
   const byType = useMemo(() => {
@@ -94,7 +107,7 @@ export default function Dashboard() {
   const paymentTotals = useMemo(() => {
     const map = new Map<string, number>();
     for (const o of ordersOfDay as any[]) {
-      const k = o?.paymentMethod || "—";
+      const k = o?.paymentMethod ?? o?.payment_method ?? "—";
       map.set(k, (map.get(k) || 0) + (Number(o?.total) || 0));
     }
     return Array.from(map.entries()).sort((a, b) => b[1] - a[1]);
@@ -120,7 +133,7 @@ export default function Dashboard() {
     return Array.from(map.entries()).sort((a, b) => b[1].revenue - a[1].revenue);
   }, [ordersOfDay]);
 
-  // 最近 4 天（日營收/筆數）- 基於 validOrders（已是四天視窗）
+  // 最近 4 天（日營收/筆數）
   const last4 = useMemo(() => {
     const base = new Date(picked);
     if (Number.isNaN(base.getTime())) return [];
@@ -142,6 +155,7 @@ export default function Dashboard() {
     return days.map((k) => ({ day: k, revenue: group.get(k)?.revenue || 0, count: group.get(k)?.count || 0 }));
   }, [validOrders, picked]);
 
+  // 交班訊息
   const buildShiftSummary = () => {
     const lines: string[] = [];
     lines.push(`Shift Summary — ${picked}`);
