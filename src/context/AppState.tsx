@@ -13,6 +13,7 @@ import {
   fetchOrders,
   placeOrder,
   voidOrderDB,
+  restockByOrder,
   type PlaceOrderItem,
 } from "../services/orders";
 
@@ -174,13 +175,21 @@ function dedupeInventory(inv: Inventory): Inventory {
 
 // ====== 本地 fallback：嘗試呼叫 DB 的 restock_by_order RPC（若無則忽略） ======
 async function tryRestockByOrder(orderId: string): Promise<void> {
+  // 1) 優先嘗試 DB 端 RPC（若你有建立）
   try {
     const { error } = await supabase.rpc("restock_by_order", {
       p_order_id: orderId,
     });
-    if (error) throw error;
+    if (!error) return; // RPC 成功就結束
   } catch {
-    // 若沒有此 RPC 或權限不足，忽略即可（避免前端報錯）
+    // ignore，往下走 fallback
+  }
+
+  // 2) 沒有 RPC 或失敗時，改用本地 restockByOrder（讀 order_items -> 加回 stock_kg）
+  try {
+    await restockByOrder(orderId);
+  } catch (e) {
+    console.error("[AppState] restockByOrder fallback failed:", e);
   }
 }
 

@@ -2,6 +2,7 @@
 import React, { useEffect, useMemo, useState } from "react";
 import PosButton from "../components/PosButton.jsx";
 import { fetchOrders } from "../services/orders";
+import { useAppState } from "../context/AppState";
 
 /** 輸入是金額（MOP），四捨五入到 2 位小數並去掉多餘 0 */
 const fmtMoney = (n: number) => {
@@ -34,6 +35,7 @@ type OrderRow = {
 type StatusFilter = "all" | "active" | "voided";
 
 export default function History() {
+  const { voidOrder } = useAppState();
   // 查詢條件
   const [status, setStatus] = useState<StatusFilter>("all");
   const [fromStr, setFromStr] = useState<string>(""); // YYYY-MM-DD（空字串代表未設定）
@@ -46,6 +48,9 @@ export default function History() {
   // 載入結果
   const [rows, setRows] = useState<OrderRow[]>([]);
   const [loading, setLoading] = useState(false);
+  // UI 狀態
+  const [voidingId, setVoidingId] = useState<string | null>(null);   // 哪一筆正在 void
+  const [detailOrder, setDetailOrder] = useState<OrderRow | null>(null);
 
   // 觸發查詢
   const reload = React.useCallback(async () => {
@@ -79,6 +84,28 @@ export default function History() {
   // 以邏輯統一 Delivery 判斷（和 Dashboard 採用相同準則）
   const isDelivery = (o: OrderRow) =>
     typeof o.isDelivery === "boolean" ? o.isDelivery : o.channel === "DELIVERY";
+  // 作廢 + 回補庫存
+  const handleVoid = async (order: OrderRow) => {
+    if (!order?.id || order.voided) return;
+
+    const shortId = (order.id || "").slice(-6);
+    const ok = window.confirm(`確定要作廢這張訂單 ${shortId} 嗎？`);
+    if (!ok) return;
+
+    const reasonInput = window.prompt("可輸入作廢原因（選填）：", "") || undefined;
+
+    try {
+      setVoidingId(order.id);
+      // 帶 restock: true → 會呼叫 tryRestockByOrder，把庫存加回去
+      await voidOrder(order.id, { restock: true, reason: reasonInput });
+      await reload(); // 重新載 History 畫面
+    } catch (e: any) {
+      console.error("[History] void failed:", e);
+      alert(e?.message ?? "作廢失敗，請稍後再試");
+    } finally {
+      setVoidingId(null);
+    }
+  };
 
   // 小計（僅本頁）
   const pageTotals = useMemo(() => {
@@ -205,16 +232,17 @@ export default function History() {
                 <th className="px-3 py-2 text-left">Payment</th>
                 <th className="px-3 py-2 text-right">Total</th>
                 <th className="px-3 py-2 text-center">Voided</th>
+                <th className="px-3 py-2 text-center">Actions</th>
               </tr>
             </thead>
             <tbody>
               {loading ? (
                 <tr>
-                  <td colSpan={6} className="px-3 py-6 text-center text-gray-500">Loading…</td>
+                  <td colSpan={7} className="px-3 py-6 text-center text-gray-500">Loading…</td>
                 </tr>
               ) : rows.length === 0 ? (
                 <tr>
-                  <td colSpan={6} className="px-3 py-6 text-center text-gray-400">No records.</td>
+                  <td colSpan={7} className="px-3 py-6 text-center text-gray-400">No records.</td>
                 </tr>
               ) : (
                 rows.map((o) => {
@@ -236,7 +264,7 @@ export default function History() {
                         )}
                       </td>
                       <td className="px-3 py-2">{o.paymentMethod || <span className="text-gray-400">—</span>}</td>
-                      <td className="px-3 py-2 text-right font-bold text-[#dc2626]">MOP$ {fmtMoney(o.total)}</td>
+                      <td className="px-3 py-2 text-right font-bold text-[#dc2626]">$ {fmtMoney(o.total)}</td>
                       <td className="px-3 py-2 text-center">
                         {o.voided ? (
                           <span className="inline-block text-[11px] px-2 py-[2px] rounded bg-rose-100 text-rose-700">
@@ -248,12 +276,120 @@ export default function History() {
                           </span>
                         )}
                       </td>
+                      <td className="px-3 py-2 text-center">
+                        <div className="flex items-center justify-center gap-2">
+                          {/* 查看明細 */}
+                          <PosButton
+                            variant="black"
+                            className="px-2 py-1 text-xs"
+                            onClick={() => setDetailOrder(o)}
+                            title="View order details"
+                          >
+                            Details
+                          </PosButton>
+
+                          {/* 作廢按鈕：已 void 的就不顯示 */}
+                          {!o.voided && (
+                            <PosButton
+                              variant="red"
+                              className="px-2 py-1 text-xs"
+                              disabled={voidingId === o.id}
+                              onClick={() => handleVoid(o)}
+                              title="Void this order"
+                            >
+                              Void
+                            </PosButton>
+                          )}
+                        </div>
+                      </td>
                     </tr>
                   );
                 })
               )}
             </tbody>
           </table>
+          {detailOrder && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40">
+          <div className="bg-white rounded-xl shadow-xl max-w-lg w-full mx-4">
+            {/* header */}
+            <div className="flex items-center justify-between border-b px-4 py-3">
+              <div>
+                <div className="text-xs text-gray-500">
+                  {isDelivery(detailOrder) ? "Delivery" : "In-store"} •{" "}
+                  {fmtDateTime(detailOrder.createdAt)}
+                </div>
+                <div className="text-lg font-extrabold">
+                  Order {(detailOrder.id || "").slice(-6)}
+                </div>
+              </div>
+              <button
+                type="button"
+                className="text-gray-500 hover:text-black text-xl leading-none px-2"
+                onClick={() => setDetailOrder(null)}
+              >
+                ×
+              </button>
+            </div>
+
+            {/* items */}
+            <div className="px-4 py-3 max-h-[60vh] overflow-y-auto">
+              {(!detailOrder.items || detailOrder.items.length === 0) ? (
+                <p className="text-gray-500 text-sm">No items.</p>
+              ) : (
+                <table className="w-full text-sm">
+                  <thead>
+                    <tr className="text-xs text-gray-500 border-b">
+                      <th className="py-1 text-left">Item</th>
+                      <th className="py-1 text-right">Qty</th>
+                      <th className="py-1 text-right">Price</th>
+                      <th className="py-1 text-right">Subtotal</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {detailOrder.items!.map((it, idx) => (
+                      <tr key={idx} className="border-b last:border-0">
+                        <td className="py-1 pr-2">
+                          <div>{it.name}</div>
+                          {it.grams ? (
+                            <div className="text-xs text-gray-500">
+                              {it.grams}g{it.category ? ` • ${it.category}` : ""}
+                            </div>
+                          ) : null}
+                        </td>
+                        <td className="py-1 text-right">{it.qty}</td>
+                        <td className="py-1 text-right">{fmtMoney(it.price)}</td>
+                        <td className="py-1 text-right">
+                          {fmtMoney(it.qty * it.price)}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              )}
+            </div>
+
+            {/* footer */}
+            <div className="px-4 py-3 border-t flex items-center justify-between text-sm">
+              <div>
+                <span className="text-gray-500">Payment: </span>
+                <span>{detailOrder.paymentMethod || "—"}</span>
+              </div>
+              <div className="font-bold">
+                Total: MOP$ {fmtMoney(detailOrder.total)}
+              </div>
+            </div>
+            <div className="px-4 py-3 border-t flex justify-end">
+              <PosButton
+                variant="black"
+                className="px-4 py-2"
+                onClick={() => setDetailOrder(null)}
+              >
+                Close
+              </PosButton>
+            </div>
+          </div>
+        </div>
+      )}
         </div>
 
         {/* 分頁 */}
