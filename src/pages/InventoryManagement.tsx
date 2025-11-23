@@ -2,6 +2,7 @@
 import React from "react";
 import PosButton from "../components/PosButton.jsx";
 import { fetchInventoryRows } from "../services/inventory";
+import { updateStockKgBySku } from "../services/inventory";
 
 type Row = {
   sku: string;
@@ -24,6 +25,8 @@ export default function InventoryManagement() {
   const [rows, setRows] = React.useState<Row[]>([]);
   const [loading, setLoading] = React.useState(true);
   const [updatedAt, setUpdatedAt] = React.useState<string>("");
+  const [editMode, setEditMode] = React.useState<boolean>(false);
+  const [savingSku, setSavingSku] = React.useState<Record<string, boolean>>({});
 
   const refresh = React.useCallback(async () => {
     setLoading(true);
@@ -54,21 +57,110 @@ export default function InventoryManagement() {
   const singleRows = rows.filter((r) => r.category === "drinks" && r.sub_key === "singleOrigin");
   const beanRows = rows.filter((r) => r.category === "HandDrip");
 
+  // --- 編輯庫存：樂觀更新 + 失敗回滾 ---
+  const commitStock = async (sku: string, next: number) => {
+    const nextVal = Number.isFinite(next) ? Number(next) : 0;
+
+    setSavingSku((m) => ({ ...m, [sku]: true }));
+    // 記下舊值
+    const prevRows = rows;
+    const old = prevRows.find((r) => r.sku === sku)?.stock_kg ?? 0;
+
+    // 樂觀更新
+    setRows((arr) => arr.map((r) => (r.sku === sku ? { ...r, stock_kg: nextVal } : r)));
+
+    try {
+      await updateStockKgBySku(sku, nextVal);
+      // 成功就保持目前畫面
+    } catch (e: any) {
+      console.error("[updateStockKgBySku] failed:", e);
+      alert(e?.message || "更新庫存失敗");
+      // 回滾
+      setRows((arr) => arr.map((r) => (r.sku === sku ? { ...r, stock_kg: old } : r)));
+    } finally {
+      setSavingSku((m) => ({ ...m, [sku]: false }));
+    }
+  };
+
+  const StockCell = ({ r }: { r: Row }) => {
+    const [val, setVal] = React.useState<string>(() => String(r.stock_kg ?? 0));
+
+    React.useEffect(() => {
+      // 外部 refresh 後同步顯示
+      setVal(String(r.stock_kg ?? 0));
+    }, [r.stock_kg]);
+
+    const onCommit = () => {
+      const num = Number(val);
+      if (!Number.isFinite(num) || num < 0) {
+        alert("請輸入有效的數字（>= 0）");
+        setVal(String(r.stock_kg ?? 0));
+        return;
+      }
+      if (num === Number(r.stock_kg || 0)) return; // 未改變
+      commitStock(r.sku, num);
+    };
+
+    return (
+      <div className="flex items-center justify-end gap-2">
+        {editMode ? (
+          <>
+            <input
+              className="h-9 w-28 border rounded px-2 text-right"
+              type="number"
+              step="0.01"
+              min="0"
+              value={val}
+              disabled={!!savingSku[r.sku]}
+              onChange={(e) => setVal(e.target.value)}
+              onBlur={onCommit}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") {
+                  (e.target as HTMLInputElement).blur();
+                } else if (e.key === "Escape") {
+                  setVal(String(r.stock_kg ?? 0));
+                  (e.target as HTMLInputElement).blur();
+                }
+              }}
+            />
+            <span className="text-xs text-gray-500">kg</span>
+          </>
+        ) : (
+          <span>{fmt(r.stock_kg)}</span>
+        )}
+      </div>
+    );
+  };
+
   return (
     <div className="p-6 bg-gray-50 min-h-screen" style={{ colorScheme: "light" }}>
       <div className="flex items-center gap-4 mb-4">
         <h1 className="text-2xl font-extrabold">Inventory Management</h1>
         <div className="ml-auto flex items-center gap-3 text-sm text-gray-600">
           Updated: {updatedAt || "—"}
-          <PosButton variant="confirm" className="!bg-white !text-black !border !border-gray-300" onClick={refresh} disabled={loading}>
+          <PosButton
+            variant="confirm"
+            className="!bg-white !text-black !border !border-gray-300"
+            onClick={refresh}
+            disabled={loading}
+          >
             Refresh
+          </PosButton>
+          <PosButton
+            variant="tab"
+            selected={editMode}
+            onClick={() => setEditMode((v) => !v)}
+            aria-pressed={editMode}
+            title="切換編輯庫存模式"
+          >
+            ✏️
           </PosButton>
         </div>
       </div>
 
       {/* KPI */}
       <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 mb-6">
-        <div className="bg-white border rounded-xl p-4 shadow">
+        <div className={`bg-white border rounded-xl p-4 shadow ${totalKg === 0 ? "border-red-300" : "border-gray-200"}`}>
           <div className="text-sm text-gray-500">Total Stock (kg)</div>
           <div className={`mt-1 text-3xl font-extrabold ${totalKg === 0 ? "text-red-500" : "text-[#111]"}`}>{fmt(totalKg)}</div>
         </div>
@@ -101,7 +193,9 @@ export default function InventoryManagement() {
                 {espressoRows.map((r) => (
                   <tr key={r.sku} className="border-t">
                     <td className="px-3 py-2">{r.name}</td>
-                    <td className="px-3 py-2 text-right">{fmt(r.stock_kg)}</td>
+                    <td className="px-3 py-2 text-right">
+                      <StockCell r={r} />
+                    </td>
                   </tr>
                 ))}
               </tbody>
@@ -128,7 +222,9 @@ export default function InventoryManagement() {
                 {singleRows.map((r) => (
                   <tr key={r.sku} className="border-t">
                     <td className="px-3 py-2">{r.name}</td>
-                    <td className="px-3 py-2 text-right">{fmt(r.stock_kg)}</td>
+                    <td className="px-3 py-2 text-right">
+                      <StockCell r={r} />
+                    </td>
                   </tr>
                 ))}
               </tbody>
@@ -157,7 +253,9 @@ export default function InventoryManagement() {
                   <tr key={r.sku} className="border-t">
                     <td className="px-3 py-2">{r.name}</td>
                     <td className="px-3 py-2 text-gray-600">{r.grams ? `${r.grams}g` : "—"}</td>
-                    <td className="px-3 py-2 text-right">{fmt(r.stock_kg)}</td>
+                    <td className="px-3 py-2 text-right">
+                      <StockCell r={r} />
+                    </td>
                   </tr>
                 ))}
               </tbody>

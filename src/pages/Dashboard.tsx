@@ -58,22 +58,26 @@ export default function Dashboard() {
     [validOrders, picked]
   );
 
-  /**
-   * ✅ 外送判斷（修正重點）
-   * 僅以「正向訊號」判斷外送：
-   *  1) o.isDelivery === true
-   *  2) o.deliveryFee > 0
-   *  3) 有 delivery / delivery_info / deliveryInfo 內容
-   * 其餘一律視為「門市單」；不再依賴 o.channel，避免資料層誤設時被歸到 Delivery Revenue。
-   */
+  // Dashboard.tsx —— 用這段取代原本的 isDeliveryOrder
   const isDeliveryOrder = (o: any) => {
-    if (o?.isDelivery === true) return true;
-    if (typeof o?.isDelivery === "boolean" && o.isDelivery === false) return false; // 顯示標 false 就尊重
-    if (Number(o?.deliveryFee) > 0) return true;
-    const d = (o as any).delivery ?? (o as any).delivery_info ?? (o as any).deliveryInfo;
-    if (d && typeof d === "object" && Object.keys(d).length > 0) return true;
-    return false;
+  // 1) 以 DB 的布林旗標為最高優先
+    const flag = (typeof o?.isDelivery === "boolean")
+      ? o.isDelivery
+      : (typeof o?.is_delivery === "boolean" ? o.is_delivery : null);
+    if (flag === true) return true;
+    if (flag === false) return false;
+
+  // 2) 有 delivery json（舊欄位 delivery 或新欄位 delivery_info）就視為外送
+    const hasDeliveryJson = !!(o?.deliveryInfo ?? o?.delivery_info ?? o?.delivery);
+    if (hasDeliveryJson) return true;
+
+  // 3) 有外送運費（>0）就視為外送
+    const fee = Number(o?.deliveryFee ?? o?.delivery_fee ?? 0);
+    if (Number.isFinite(fee) && fee > 0) return true;
+
+    return false; // 預設當作店內單
   };
+
 
   // 拆分營收 + 計數
   const byType = useMemo(() => {

@@ -136,3 +136,19 @@ export async function changeBeanPackSizeSafe(args: {
   if (res.error) throw res.error;
   return (res.data as string) ?? "";
 }
+export async function updateStockKgBySku(sku: string, newStockKg: number): Promise<number> {
+  const value = Number.isFinite(newStockKg) ? Number(newStockKg) : 0;
+
+  const { data, error } = await supabase
+    .from("products")
+    .update({
+      stock_kg: value,
+      updated_at: new Date().toISOString(),
+    })
+    .eq("sku", sku)
+    .select("stock_kg")
+    .maybeSingle();
+
+  if (error) throw error;
+  return Number(data?.stock_kg ?? value);
+}
