@@ -1,7 +1,7 @@
 // src/services/inventory.ts
 import { supabase } from "../supabaseClient";
 
-/** === DB 行資料（對應 v_inventory）=== */
+/** v_inventory 行型別（請確保 DB view 欄位齊全：sku/name/category/sub_key/grams/usage_per_cup/price/stock_kg） */
 export type InventoryRow = {
   sku: string;
   name: string;
@@ -10,102 +10,53 @@ export type InventoryRow = {
   grams: number | null;
   usage_per_cup: number | null;
   price: number;
-  stock_kg: number | null;
+  stock_kg: number; // 由 view 以 coalesce(...) 保證為 number
 };
 
-/** === 讀取 v_inventory === */
+/** 從 v_inventory 取清單（依 name 排序） */
 export async function fetchInventoryRows(): Promise<InventoryRow[]> {
   const { data, error } = await supabase
     .from("v_inventory")
     .select("sku,name,category,sub_key,grams,usage_per_cup,price,stock_kg")
-    .order("category", { ascending: true })
     .order("name", { ascending: true });
+
   if (error) throw error;
-  return (data ?? []) as InventoryRow[];
+  return (data ?? []).map((r: any) => ({
+    sku: r.sku,
+    name: r.name,
+    category: r.category,
+    sub_key: r.sub_key,
+    grams: r.grams,
+    usage_per_cup: r.usage_per_cup,
+    price: Number(r.price || 0),
+    stock_kg: Number(r.stock_kg || 0),
+  }));
 }
 
-/** === 將 v_inventory 轉為 AppState 需要的結構（含 unit）=== */
-export function rowsToUIInventory(rows: InventoryRow[]): any {
+/** UI 需要的分組結構（若保留原有 AppState，可用此把 rows 映射成前端使用的型態） */
+export function rowsToUIInventory(rows: InventoryRow[]) {
   const drinks = { espresso: [] as any[], singleOrigin: [] as any[] };
   const beans: any[] = [];
-
   for (const r of rows) {
+    const base = {
+      id: r.sku,
+      name: r.name,
+      price: r.price,
+      stock: r.stock_kg,     // 顯示每品項庫存
+      grams: r.grams,
+      usagePerCup: r.usage_per_cup,
+    };
     if (r.category === "drinks") {
-      const item = {
-        id: r.sku,
-        name: r.name,
-        category: "drinks",
-        subKey: r.sub_key,
-        usagePerCup: Number(r.usage_per_cup ?? 0.02),
-        price: Number(r.price) || 0,
-        stock: Number(r.stock_kg) || 0,
-        unit: "cup", // <== 供 AppState 型別檢查
-      };
-      if (r.sub_key === "espresso") drinks.espresso.push(item);
-      else drinks.singleOrigin.push(item);
+      if (r.sub_key === "singleOrigin") drinks.singleOrigin.push(base);
+      else drinks.espresso.push(base);
     } else {
-      beans.push({
-        id: r.sku,
-        name: r.name,
-        category: "HandDrip",
-        grams: Number(r.grams) || 0,
-        price: Number(r.price) || 0,
-        stock: Number(r.stock_kg) || 0,
-        unit: "g", // <== 供 AppState 型別檢查
-      });
+      beans.push(base);
     }
   }
-
   return { store: { drinks, HandDrip: beans } };
 }
 
-/** === Product Upsert：單一 RPC 版本（避免 overloading）=== */
-export async function upsertProduct(args: {
-  sku: string; name: string;
-  category: "drinks" | "HandDrip";
-  sub_key?: "espresso" | "singleOrigin" | null;
-  grams?: number | null;
-  usage_per_cup?: number | null;
-  price: number;
-}) {
-  const payload = {
-    p_sku: args.sku,
-    p_name: args.name,
-    p_category: args.category,
-    p_sub_key: args.sub_key ?? null,
-    p_grams: args.grams ?? null,
-    p_usage_per_cup: args.usage_per_cup ?? null,
-    p_price: args.price,
-  };
-  const { data, error } = await supabase.rpc("upsert_product", payload);
-  if (error) throw error;
-  return data as string; // 回傳 sku
-}
-
-/** === 刪除 Product（優先 RPC，Fallback 直刪 products）=== */
-export async function deleteProduct(sku: string) {
-  const rpc = await supabase.rpc("delete_product", { p_sku: sku });
-  if (!rpc.error) return;
-  const res = await supabase.from("products").delete().eq("sku", sku);
-  if (res.error) throw res.error;
-}
-
-/** === Beans 安全變更克數（建立新 SKU / 刪舊 SKU 等細節交給 DB）=== */
-export async function changeBeanPackSizeSafe(args: {
-  oldSku: string; name: string; price: number; oldStockKg: number; newGrams: number;
-}) {
-  const { data, error } = await supabase.rpc("change_bean_pack_size_safe", {
-    p_old_sku: args.oldSku,
-    p_name: args.name,
-    p_price: args.price,
-    p_old_stock_kg: args.oldStockKg,
-    p_new_grams: args.newGrams,
-  });
-  if (error) throw error;
-  return data as string; // new sku
-}
-
-/** === 存量總覽（v_stock_totals）=== */
+/** 庫存總覽（對接 v_stock_totals；全部回傳 number） */
 export type StockTotals = {
   totalKg: number;
   drinksKg: number;
@@ -113,16 +64,64 @@ export type StockTotals = {
   espressoKg: number;
   singleOriginKg: number;
 };
-
 export async function fetchStockTotals(): Promise<StockTotals> {
-  const { data, error } = await supabase.from("v_stock_totals").select("*").maybeSingle();
+  const { data, error } = await supabase
+    .from("v_stock_totals")
+    .select("total_kg,drinks_kg,beans_kg,espresso_kg,single_origin_kg")
+    .maybeSingle();
   if (error) throw error;
-  const row = (data ?? {}) as any;
+
   return {
-    totalKg: Number(row.total_kg) || 0,
-    drinksKg: Number(row.drinks_kg) || 0,
-    beansKg: Number(row.beans_kg) || 0,
-    espressoKg: Number(row.espresso_kg) || 0,
-    singleOriginKg: Number(row.single_origin_kg) || 0,
+    totalKg: Number((data as any)?.total_kg || 0),
+    drinksKg: Number((data as any)?.drinks_kg || 0),
+    beansKg: Number((data as any)?.beans_kg || 0),
+    espressoKg: Number((data as any)?.espresso_kg || 0),
+    singleOriginKg: Number((data as any)?.single_origin_kg || 0),
   };
+}
+
+/** 單一 upsert（避免 overloading；對應 SQL 的 public.upsert_product(...)） */
+export async function upsertProduct(args: {
+  sku: string;
+  name: string;
+  category: "drinks" | "HandDrip";
+  sub_key?: "espresso" | "singleOrigin" | null;
+  grams?: number | null;
+  usage_per_cup?: number | null;
+  price: number;
+}): Promise<string> {
+  const { sku, name, category, sub_key = null, grams = null, usage_per_cup = null, price } = args;
+  const { data, error } = await supabase.rpc("upsert_product", {
+    p_sku: sku,
+    p_name: name,
+    p_category: category,
+    p_sub_key: sub_key,
+    p_grams: grams,
+    p_usage_per_cup: usage_per_cup,
+    p_price: price,
+  });
+  if (error) throw error;
+  return (data as string) || sku;
+}
+
+/** 刪產品（對應 SQL public.delete_product） */
+export async function deleteProduct(sku: string): Promise<void> {
+  const { error } = await supabase.rpc("delete_product", { p_sku: sku });
+  if (error) throw error;
+}
+
+/** Beans 安全變更克數（對應 SQL public.change_bean_pack_size_safe） */
+export async function changeBeanPackSizeSafe(args: {
+  oldSku: string; name: string; price: number; oldStockKg: number; newGrams: number;
+}): Promise<string> {
+  const { oldSku, name, price, oldStockKg, newGrams } = args;
+  const { data, error } = await supabase.rpc("change_bean_pack_size_safe", {
+    p_old_sku: oldSku,
+    p_name: name,
+    p_price: price,
+    p_old_stock_kg: oldStockKg,
+    p_new_grams: newGrams,
+  });
+  if (error) throw error;
+  return data as string;
 }
