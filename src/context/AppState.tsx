@@ -300,34 +300,37 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
 
   // 相容門市下單：走 DB placeOrder（不再寫 app_state）
   const createOrder = useCallback(
-    async (
-      cart: CartItem[] = [],
-      _totalFromUI?: number,
-      extra?: { paymentMethod?: string }
-    ) => {
-      if (!Array.isArray(cart) || cart.length === 0) return null;
+  async (
+    cart: CartItem[] = [],
+    _totalFromUI?: number,
+    extra?: { paymentMethod?: string }
+  ) => {
+    if (!Array.isArray(cart) || cart.length === 0) return null;
 
-      const items: PlaceOrderItem[] = cart.map((it) => {
-        const isDrink = it.category === "drinks";
-        return {
-          name: it.name,
-          sku: isDrink
-            ? `${it.id}-${(it as any).subKey ?? ""}`
-            : `${it.id}-${(it as any).grams ?? 0}g`,
-          qty: it.qty,
-          price: (it as any).price || 30,
-          category: isDrink ? "drinks" : "HandDrip",
-          sub_key: isDrink ? ((it as any).subKey as any) : undefined,
-          grams: isDrink ? undefined : Number((it as any).grams ?? 0) || undefined,
-        };
-      });
+    const items: PlaceOrderItem[] = cart.map((it) => {
+      const isDrink = it.category === "drinks";
+      const sku = String(it.id || "");               // ✅ 直接用 id = sku
 
-      const id = await placeOrder(items, extra?.paymentMethod || "Cash", "ACTIVE");
-      await reloadOrders();
-      return id;
-    },
-    [reloadOrders]
-  );
+      return {
+        name: it.name,
+        sku,
+        qty: it.qty,
+        price: (it as any).price || 30,
+        category: isDrink ? "drinks" : "HandDrip",
+        sub_key: isDrink ? ((it as any).subKey as any) : undefined,
+        grams: isDrink ? undefined : Number((it as any).grams ?? 0) || undefined,
+      };
+    });
+
+    const id = await placeOrder(items, extra?.paymentMethod || "Cash", "ACTIVE");
+
+    // ✅ 下單後，同步更新訂單列表 + 庫存
+    await Promise.all([reloadOrders(), reloadInventory()]);
+
+    return id;
+  },
+  [reloadOrders, reloadInventory] // ✅ 記得把 reloadInventory 加進依賴
+);
 
   // 作廢（DB）
   const voidOrder = useCallback(

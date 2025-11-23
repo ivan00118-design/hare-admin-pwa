@@ -216,13 +216,14 @@ export default function Delivery() {
     if (cart.length === 0) return alert("請先加入商品");
 
     const payload = cart.map((it) => ({
-      name: it.name,
-      sku: `${it.id}-${(it as any).grams}g`,
-      qty: it.qty,
-      price: it.price || 30,
-      category: "HandDrip" as const,
-      grams: Number((it as any).grams) || undefined,
-    }));
+  name: it.name,
+  sku: String(it.id),                     // ✅ 直接用 id = sku
+  qty: it.qty,
+  price: it.price || 30,
+  category: "HandDrip" as const,
+  grams: Number((it as any).grams) || undefined,
+}));
+
 
     setSaving(true);
     try {
