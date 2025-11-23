@@ -638,7 +638,17 @@ export default function Delivery() {
                     <tr key={s.id} className="border-t">
                       <td className="px-4 py-3">{fmtTime(s.created_at)}</td>
                       <td className="px-4 py-3 font-mono">{shortId}</td>
-                      <td className="px-4 py-3">{s.customer_name || <span className="text-gray-400">—</span>}</td>
+                      <td className="px-4 py-3">
+                        <div>{s.customer_name || <span className="text-gray-400">—</span>}</div>
+                        {s.note && (
+                          <div
+                            className="mt-1 text-xs text-gray-500 max-w-xs truncate"
+                            title={s.note}
+                          >
+                            📝 {s.note}
+                          </div>
+                        )}
+                    </td>
                       <td className="px-4 py-3 text-right font-extrabold text-[#dc2626]">MOP$ {fmt(s.total)}</td>
                       <td className="px-4 py-3 text-center">
                         {s.ship_status === "PENDING" ? (

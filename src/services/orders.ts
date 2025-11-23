@@ -22,6 +22,7 @@ export type ShippingRow = {
   total: number;
   customer_name: string | null;
   ship_status: ShipStatus;
+  note: string | null;
 };
 
 type FetchOrdersOpts = {
@@ -269,6 +270,7 @@ export async function listShipping(
     total: Number(r.total || 0),
     customer_name: r.delivery_info?.customer_name ?? null,
     ship_status: (r.delivery_info?.ship_status || "PENDING") as ShipStatus,
+    note: r.delivery_info?.note ?? null,
   }));
 }
 
