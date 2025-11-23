@@ -1,231 +1,329 @@
 // src/services/orders.ts
 import { supabase } from "../supabaseClient";
 
-// ---------- 型別 ----------
-export type UIStatus = "all" | "active" | "voided";
+/** Domain types */
+export type Category = "drinks" | "HandDrip";
+export type DrinkSubKey = "espresso" | "singleOrigin";
+export type ShipStatus = "PENDING" | "CLOSED";
 
 export type PlaceOrderItem = {
   name: string;
-  sku?: string | null;
+  sku: string;
   qty: number;
   price: number;
-  category?: "HandDrip" | "drinks";
-  grams?: number;
-  sub_key?: "espresso" | "singleOrigin";
+  category: Category;
+  sub_key?: DrinkSubKey | null;
+  grams?: number | null;
 };
 
-export type DeliveryInfo = {
-  customer_name?: string | null;
-  phone?: string | null;
-  address?: string | null;
-  note?: string | null;
-  scheduled_at?: string | null;
-  ship_status?: "PENDING" | "CLOSED" | null;
-};
-
-export type PlaceOrderOptions = {
-  channel?: "IN_STORE" | "DELIVERY";
-  deliveryFee?: number;
-  deliveryInfo?: DeliveryInfo | null;
-  status?: "ACTIVE" | "VOIDED";
-};
-
-export interface FetchParams {
-  from?: Date | null;
-  to?: Date | null;
-  status?: UIStatus;
-  channel?: "ALL" | "IN_STORE" | "DELIVERY";
-  page?: number;
-  pageSize?: number;
-}
-
-// ---------- 小工具 ----------
-function startOfDay(d: Date) { const x = new Date(d); x.setHours(0,0,0,0); return x.toISOString(); }
-function endOfDay(d: Date)   { const x = new Date(d); x.setHours(23,59,59,999); return x.toISOString(); }
-
-// ---------- 查詢訂單（雙路徑 + 關聯 items） ----------
-export async function fetchOrders({
-  from, to, status = "all", channel = "ALL", page = 0, pageSize = 100,
-}: FetchParams): Promise<{ rows: any[]; count: number; totalAmount: number }> {
-
-  const fromISO = from ? startOfDay(from) : undefined;
-  const toISO   = to   ? endOfDay(to)   : undefined;
-  const fromIdx = page * pageSize;
-  const toIdx   = fromIdx + pageSize - 1;
-
-  // 先嘗試新版欄位（channel/delivery_info），錯了再走舊版（is_delivery/delivery）
-  const runChannel = async () => {
-    let q = supabase.from("orders").select(`
-      id, created_at, status, payment_method,
-      total, delivery_fee, channel, delivery_info,
-      is_delivery, delivery,
-      void_reason, voided_at
-    `, { count: "exact" }).order("created_at", { ascending: false });
-
-    if (fromISO) q = q.gte("created_at", fromISO);
-    if (toISO)   q = q.lte("created_at", toISO);
-    if (status !== "all") q = q.eq("status", status.toUpperCase());
-    if (channel === "IN_STORE") q = q.eq("channel", "IN_STORE");
-    if (channel === "DELIVERY") q = q.eq("channel", "DELIVERY");
-    return q.range(fromIdx, toIdx);
-  };
-
-  const runLegacy = async () => {
-    let q = supabase.from("orders").select(`
-      id, created_at, status, payment_method,
-      total, delivery_fee, is_delivery, delivery,
-      void_reason, voided_at
-    `, { count: "exact" }).order("created_at", { ascending: false });
-
-    if (fromISO) q = q.gte("created_at", fromISO);
-    if (toISO)   q = q.lte("created_at", toISO);
-    if (status !== "all") q = q.eq("status", status.toUpperCase());
-    if (channel === "IN_STORE") q = q.eq("is_delivery", false);
-    if (channel === "DELIVERY") q = q.eq("is_delivery", true);
-    return q.range(fromIdx, toIdx);
-  };
-
-  let res: any;
-  try {
-    res = await runChannel();
-    if (res.error) throw res.error;
-  } catch {
-    res = await runLegacy();
-    if (res.error) throw res.error;
-  }
-
-  // 整理成 UI rows（最重要：isDelivery 的兼容判斷）
-  const baseRows = (res.data ?? []).map((r: any) => {
-    const deliveryFlag =
-      (typeof r.is_delivery !== "undefined" ? !!r.is_delivery : false) ||
-      (r.channel ? r.channel === "DELIVERY" : false) ||
-      (!!r.delivery_info) ||
-      (!!r.delivery) ||
-      ((Number(r.delivery_fee) || 0) > 0);
-
-    return {
-      id: r.id,
-      createdAt: r.created_at,
-      paymentMethod: r.payment_method,
-      total: r.total,
-      deliveryFee: r.delivery_fee ?? 0,
-      voided: r.status === "VOIDED",
-      voidReason: r.void_reason ?? null,
-      voidedAt: r.voided_at ?? null,
-      isDelivery: deliveryFlag,
-      delivery: typeof r.delivery !== "undefined" ? r.delivery : (r.delivery_info ?? null),
-      items: [] as any[],
-      channel: r.channel ?? (deliveryFlag ? "DELIVERY" : "IN_STORE"), // 提供 Dashboard 顯示用
-    };
-  });
-
-  // 一次抓回 order_items 並關聯
-  const ids = baseRows.map((r: any) => r.id);
-  if (ids.length > 0) {
-    const its = await supabase
-      .from("order_items")
-      .select("order_id,name,category,sub_key,grams,qty,price,sku")
-      .in("order_id", ids);
-
-    if (!its.error) {
-      const byOrder = new Map<string, any[]>();
-      for (const it of (its.data ?? []) as any[]) {
-        if (!byOrder.has(it.order_id)) byOrder.set(it.order_id, []);
-        byOrder.get(it.order_id)!.push({
-          name: it.name,
-          category: it.category ?? null,
-          subKey: it.sub_key ?? null,
-          grams: typeof it.grams === "number" ? it.grams : (it.grams ?? null),
-          qty: it.qty,
-          price: it.price,
-          sku: it.sku ?? null,
-        });
-      }
-      for (const r of baseRows) r.items = byOrder.get(r.id) ?? [];
-    }
-  }
-
-  const totalAmount = baseRows.reduce((s: number, r: any) => s + (Number(r.total) || 0), 0);
-  return { rows: baseRows, count: res.count ?? 0, totalAmount };
-}
-
-// ---------- 下單（建議仍呼叫你現有的 place_order；這裡保留 wrapper） ----------
-export async function placeOrder(
-  items: PlaceOrderItem[],
-  paymentMethod: string,
-  status: "ACTIVE" | "VOIDED" = "ACTIVE",
-  opts: { deliveryFee?: number; deliveryInfo?: DeliveryInfo | null; status?: "ACTIVE" | "VOIDED" } = {}
-) {
-  const itemsTotal = items.reduce((s, it) => s + Number(it.qty) * Number(it.price), 0);
-
-  const { data, error } = await supabase.rpc("place_order", {
-    p_payment_method: paymentMethod,
-    p_items: items,
-    p_total: itemsTotal,
-    p_status: opts.status ?? status,
-    // 不直接寫 channel 以避免「cannot insert a non-DEFAULT value into column 'channel'」
-    p_delivery_fee: opts.deliveryFee ?? 0,
-    p_delivery_info: opts.deliveryInfo ?? {},  // 有值即可被視為外送（v_shipping_list_compat 也會抓到）
-    p_fail_when_insufficient: false,
-  });
-  if (error) throw error;
-  return data as string;
-}
-
-export async function placeDelivery(
-  items: PlaceOrderItem[],
-  paymentMethod: string,
-  info: DeliveryInfo,
-  deliveryFee = 0,
-  status: "ACTIVE" | "VOIDED" = "ACTIVE"
-) {
-  return placeOrder(items, paymentMethod, status, {
-    deliveryInfo: info,
-    deliveryFee,
-  });
-}
-
-// ---------- Shipping List（完全 DB 化） ----------
-export type ShipStatus = "PENDING" | "CLOSED";
 export type ShippingRow = {
   id: string;
   created_at: string;
-  status: string;
-  payment_method: string | null;
   total: number;
-  delivery_fee: number;
-  channel: "DELIVERY" | "IN_STORE";
-  delivery_json: any;
-  ship_status: ShipStatus | null;
   customer_name: string | null;
-  items_count: number;
+  ship_status: ShipStatus;
 };
 
-export async function listShipping(status: ShipStatus, limit = 200) {
-  const { data, error } = await supabase
-    .from("v_shipping_list_compat")
-    .select("*")
-    .eq("ship_status", status)
+type FetchOrdersOpts = {
+  from?: Date | string;
+  to?: Date | string;
+  status?: "all" | "active" | "voided";
+  page?: number;
+  pageSize?: number;
+};
+
+/** -------------- helpers -------------- */
+const iso = (d?: Date | string | null) =>
+  !d ? undefined : (d instanceof Date ? d : new Date(d)).toISOString();
+
+function sum(items: PlaceOrderItem[]) {
+  return items.reduce((s, i) => s + Number(i.qty || 0) * Number(i.price || 0), 0);
+}
+
+/**
+ * 依據 items 扣/回存：讀取對應 products 瞭解 usage_per_cup / grams，再更新 stock_kg
+ * op: "DEDUCT" 表示出貨扣庫存；"ADD" 表示退貨補庫存
+ */
+async function updateStockByItems(
+  items: PlaceOrderItem[],
+  op: "DEDUCT" | "ADD"
+): Promise<void> {
+  const skus = Array.from(new Set(items.map((i) => i.sku)));
+  if (skus.length === 0) return;
+
+  const { data: prods, error } = await supabase
+    .from("products")
+    .select("sku, category, usage_per_cup, grams, stock_kg")
+    .in("sku", skus);
+
+  if (error) throw error;
+
+  // 整理各 SKU 需要變動的公斤數
+  const deltaKg = new Map<string, number>();
+  for (const it of items) {
+    const p = prods?.find((x) => x.sku === it.sku);
+    const cat: Category = (it.category || p?.category || "HandDrip") as Category;
+    let d = 0;
+    if (cat === "drinks") {
+      const usage = Number(p?.usage_per_cup ?? 0);
+      d = usage * Number(it.qty || 0);
+    } else {
+      const g = Number(it.grams ?? p?.grams ?? 0);
+      d = (g * Number(it.qty || 0)) / 1000;
+    }
+    deltaKg.set(it.sku, (deltaKg.get(it.sku) || 0) + d);
+  }
+
+  // 逐 SKU 更新（簡化處理；需要交易可改用 SQL RPC）
+  for (const [sku, kg] of deltaKg) {
+    const row = prods?.find((x) => x.sku === sku);
+    const current = Number(row?.stock_kg ?? 0);
+    const next = op === "DEDUCT" ? Math.max(0, current - kg) : current + kg;
+    const { error: uerr } = await supabase
+      .from("products")
+      .update({ stock_kg: next })
+      .eq("sku", sku);
+    if (uerr) throw uerr;
+  }
+}
+
+/** -------------- queries / commands -------------- */
+
+/** 讀取訂單（含 order_items）並映射回 UI 需要的結構 */
+export async function fetchOrders(opts: FetchOrdersOpts = {}) {
+  const page = Number(opts.page || 0);
+  const size = Math.max(1, Number(opts.pageSize || 100));
+
+  let q = supabase
+    .from("orders")
+    .select(
+      "id, created_at, status, payment_method, total, channel, is_delivery, delivery_fee, delivery_info, voided, order_items(name, sku, qty, price, category, grams, sub_key)"
+    )
+    .order("created_at", { ascending: true });
+
+  if (opts.from) q = q.gte("created_at", iso(opts.from)!);
+  if (opts.to) q = q.lte("created_at", iso(opts.to)!);
+
+  if (opts.status === "active") {
+    // voided = false or null
+    q = q.or("voided.is.false,voided.is.null");
+  } else if (opts.status === "voided") {
+    q = q.eq("voided", true);
+  }
+
+  q = q.range(page * size, page * size + size - 1);
+
+  const { data, error } = await q;
+  if (error) throw error;
+
+  const rows =
+    (data || []).map((r: any) => ({
+      id: r.id,
+      createdAt: r.created_at,
+      status: r.status,
+      paymentMethod: r.payment_method,
+      total: Number(r.total || 0),
+      // 僅以 channel 判定交付型態（避免誤判）
+      channel: r.channel as "IN_STORE" | "DELIVERY" | null,
+      isDelivery: (r.channel as string) === "DELIVERY",
+      deliveryFee: Number(r.delivery_fee || 0),
+      delivery: r.delivery_info || null,
+      items:
+        (r.order_items || []).map((it: any) => ({
+          name: it.name,
+          sku: it.sku,
+          qty: Number(it.qty || 0),
+          price: Number(it.price || 0),
+          category: it.category as Category,
+          grams: it.grams ?? null,
+          sub_key: it.sub_key ?? null,
+        })) || [],
+      voided: !!r.voided,
+    })) || [];
+
+  return { rows, page, pageSize: size };
+}
+
+/** 一般門市下單 */
+export async function placeOrder(
+  items: PlaceOrderItem[],
+  paymentMethod = "Cash",
+  status: "ACTIVE" | "VOID" = "ACTIVE"
+): Promise<string> {
+  if (!Array.isArray(items) || items.length === 0) throw new Error("items empty");
+
+  const total = sum(items);
+
+  const { data: ord, error } = await supabase
+    .from("orders")
+    .insert({
+      payment_method: paymentMethod,
+      total,
+      channel: "IN_STORE",
+      is_delivery: false,
+      delivery_fee: 0,
+      delivery_info: null,
+      status,
+      voided: false,
+    })
+    .select("id")
+    .single();
+
+  if (error) throw error;
+  const orderId: string = ord!.id;
+
+  const payload = items.map((it) => ({
+    order_id: orderId,
+    name: it.name,
+    sku: it.sku,
+    qty: it.qty,
+    price: it.price,
+    category: it.category,
+    grams: it.grams ?? null,
+    sub_key: it.sub_key ?? null,
+  }));
+
+  const { error: iErr } = await supabase.from("order_items").insert(payload);
+  if (iErr) throw iErr;
+
+  await updateStockByItems(items, "DEDUCT");
+
+  return orderId;
+}
+
+/** Delivery 下單（含運費、出貨資訊） */
+export async function placeDelivery(
+  items: PlaceOrderItem[],
+  paymentMethod = "Cash",
+  deliveryInfo: Record<string, any> = {},
+  deliveryFee = 0,
+  status: "ACTIVE" | "VOID" = "ACTIVE"
+): Promise<string> {
+  if (!Array.isArray(items) || items.length === 0) throw new Error("items empty");
+
+  const total = sum(items) + Number(deliveryFee || 0);
+
+  const info = {
+    ...deliveryInfo,
+    ship_status: (deliveryInfo?.ship_status as ShipStatus) || "PENDING",
+  };
+
+  const { data: ord, error } = await supabase
+    .from("orders")
+    .insert({
+      payment_method: paymentMethod,
+      total,
+      channel: "DELIVERY",
+      is_delivery: true,
+      delivery_fee: deliveryFee || 0,
+      delivery_info: info,
+      status,
+      voided: false,
+    })
+    .select("id")
+    .single();
+
+  if (error) throw error;
+  const orderId: string = ord!.id;
+
+  const payload = items.map((it) => ({
+    order_id: orderId,
+    name: it.name,
+    sku: it.sku,
+    qty: it.qty,
+    price: it.price,
+    category: it.category,
+    grams: it.grams ?? null,
+    sub_key: it.sub_key ?? null,
+  }));
+
+  const { error: iErr } = await supabase.from("order_items").insert(payload);
+  if (iErr) throw iErr;
+
+  await updateStockByItems(items, "DEDUCT");
+
+  return orderId;
+}
+
+/** Delivery 出貨清單（僅從 channel='DELIVERY' 篩出） */
+export async function listShipping(
+  status: ShipStatus = "PENDING",
+  limit = 400
+): Promise<ShippingRow[]> {
+  let q = supabase
+    .from("orders")
+    .select("id, created_at, total, delivery_info")
+    .eq("channel", "DELIVERY")
     .order("created_at", { ascending: false })
     .limit(limit);
+
+  // 以 JSON contains 過濾 ship_status
+  q = q.contains("delivery_info", { ship_status: status });
+
+  const { data, error } = await q;
   if (error) throw error;
-  return (data ?? []) as ShippingRow[];
+
+  return (data || []).map((r: any) => ({
+    id: r.id,
+    created_at: r.created_at,
+    total: Number(r.total || 0),
+    customer_name: r.delivery_info?.customer_name ?? null,
+    ship_status: (r.delivery_info?.ship_status || "PENDING") as ShipStatus,
+  }));
 }
 
+/** 設定出貨狀態（直接更新 JSON，不呼叫 RPC，可避免 404） */
 export async function setOrderShipStatus(orderId: string, shipStatus: ShipStatus) {
-  const { error } = await supabase.rpc("set_delivery_ship_status", {
-    p_order_id: orderId,
-    p_ship_status: shipStatus,
-  });
+  if (!orderId) throw new Error("orderId required");
+
+  const { data, error } = await supabase
+    .from("orders")
+    .select("delivery_info")
+    .eq("id", orderId)
+    .single();
+
   if (error) throw error;
+
+  const info = { ...(data?.delivery_info || {}), ship_status: shipStatus };
+  const { error: uerr } = await supabase
+    .from("orders")
+    .update({ delivery_info: info })
+    .eq("id", orderId);
+
+  if (uerr) throw uerr;
 }
 
-// ---------- 作廢 ----------
-export async function voidOrderDB(orderId: string, opts?: { reason?: string; restock?: boolean }) {
-  const { error } = await supabase.rpc("void_order", {
-    p_order_id: orderId,
-    p_reason: opts?.reason ?? null,
-    p_restock: !!opts?.restock,
-  });
+/** 將某張訂單的庫存「加回去」（作廢後用） */
+export async function restockByOrder(orderId: string) {
+  if (!orderId) return;
+  const { data, error } = await supabase
+    .from("order_items")
+    .select("name, sku, qty, price, category, grams, sub_key")
+    .eq("order_id", orderId);
+
+  if (error) throw error;
+
+  const items: PlaceOrderItem[] =
+    (data || []).map((it: any) => ({
+      name: it.name,
+      sku: it.sku,
+      qty: Number(it.qty || 0),
+      price: Number(it.price || 0),
+      category: it.category as Category,
+      grams: it.grams ?? null,
+      sub_key: it.sub_key ?? null,
+    })) || [];
+
+  if (items.length > 0) {
+    await updateStockByItems(items, "ADD");
+  }
+}
+
+/** 作廢訂單（選配：如需記錄原因） */
+export async function voidOrderDB(orderId: string, opt?: { reason?: string }) {
+  const { error } = await supabase
+    .from("orders")
+    .update({ voided: true, void_reason: opt?.reason || null, voided_at: new Date().toISOString() })
+    .eq("id", orderId);
   if (error) throw error;
 }

@@ -1,3 +1,4 @@
+// src/pages/Delivery.tsx
 import React, { useEffect, useMemo, useState } from "react";
 import { useAppState, type UIItem } from "../context/AppState";
 import PosButton from "../components/PosButton.jsx";
@@ -12,14 +13,12 @@ import {
   loadDeliveryShortcuts,
   saveDeliveryShortcuts,
   newId,
-  type DeliveryShortcut, // 假設服務回傳 { id, label, fee, note, defaultPayment, sort_order?, active? }
+  type DeliveryShortcut,
 } from "../services/deliveryShortcuts";
 
 import iconSimplePay from "../assets/payments/SimplePay.jpg";
 import iconCash from "../assets/payments/Cash.png";
 import iconMacauPass from "../assets/payments/MacauPass.png";
-// 如果沒有 QR 圖檔，保留文字按鈕即可
-// import iconQR from "../assets/payments/QR.png";
 
 type TabKey = "HandDrip" | "delivery";
 
@@ -37,7 +36,7 @@ export type DeliveryInfo = {
   address?: string | null;
   note?: string | null;
   scheduled_at?: string | null;
-  ship_status?: ShipStatus | null; // PENDING / CLOSED
+  ship_status?: ShipStatus | null;
 };
 
 const fmt = (n: number) => {
@@ -54,13 +53,11 @@ const fmtTime = (iso?: string | null) => {
 export default function Delivery() {
   const { inventory } = useAppState();
 
-  // Tabs / carts / payment
   const [activeTab, setActiveTab] = useState<TabKey>("HandDrip");
   const [cart, setCart] = useState<CartItem[]>([]);
   const [paymentMethod, setPaymentMethod] = useState("");
   const [saving, setSaving] = useState(false);
 
-  // Recipient / fee
   const [delivery, setDelivery] = useState<DeliveryInfo>({
     customer_name: "",
     note: "",
@@ -69,13 +66,11 @@ export default function Delivery() {
   });
   const [deliveryFee, setDeliveryFee] = useState<number>(0);
 
-  // Delivery Shortcuts（DB 化）
   const [scEdit, setScEdit] = useState(false);
   const [scSaving, setScSaving] = useState(false);
   const [scLoading, setScLoading] = useState(true);
   const [shortcuts, setShortcuts] = useState<DeliveryShortcut[]>([]);
 
-  // 出貨清單（DB 化）
   const [shipTab, setShipTab] = useState<ShipStatus>("PENDING");
   const [shipLoading, setShipLoading] = useState(true);
   const [shipRows, setShipRows] = useState<ShippingRow[]>([]);
@@ -84,7 +79,6 @@ export default function Delivery() {
     { key: "SimplePay", label: "SimplePay", icon: iconSimplePay },
     { key: "Cash", label: "Cash", icon: iconCash },
     { key: "MacauPass", label: "MacauPass", icon: iconMacauPass },
-    // 若無 QR 圖片，可不給 icon，會顯示文字
     { key: "QR", label: "QR", icon: null },
   ];
 
@@ -245,7 +239,6 @@ export default function Delivery() {
         "ACTIVE"
       );
 
-      // 視 DB 設計而定：若 RPC 已寫入 ship_status，這一行等於 NOP；否則可主動標成 PENDING
       try {
         await setOrderShipStatus(orderId, "PENDING");
       } catch {}
@@ -255,7 +248,6 @@ export default function Delivery() {
       setPaymentMethod("");
       setDelivery({ customer_name: "", note: "", scheduled_at: null, ship_status: "PENDING" });
       setDeliveryFee(0);
-      // 重新抓出貨清單
       loadShip(shipTab);
     } catch (e: any) {
       console.error(e);
@@ -282,7 +274,7 @@ export default function Delivery() {
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
-        {/* 左：商品清單 / Shortcuts */}
+        {/* Left */}
         <div className="lg:col-span-5 min-w-0">
           <div className="bg-white shadow-xl rounded-xl p-4 border border-gray-200 h-full min-h-[420px] flex flex-col">
             <div className="flex items-center justify-between mb-3">
@@ -460,10 +452,9 @@ export default function Delivery() {
           </div>
         </div>
 
-        {/* 右：配送欄位 + 結帳 */}
+        {/* Right */}
         <div className="lg:col-span-7 min-w-0">
           <div className="bg-white shadow-xl rounded-xl p-4 border border-gray-200 h-full min-h-[420px] flex flex-col gap-4">
-            {/* Recipient */}
             <div className="rounded-lg border border-gray-200 p-4">
               <h3 className="text-lg font-extrabold mb-3">Recipient</h3>
               <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
@@ -498,7 +489,6 @@ export default function Delivery() {
               </div>
             </div>
 
-            {/* 訂單摘要 */}
             <div className="rounded-lg border border-gray-200">
               <table className="w-full table-fixed text-sm text-gray-900">
                 <colgroup>
@@ -550,7 +540,6 @@ export default function Delivery() {
               </table>
             </div>
 
-            {/* 付款 + 總計 */}
             <div className="flex flex-col gap-4">
               <div>
                 <div className="mb-2 text-sm font-semibold text-gray-700">Payment</div>
@@ -664,13 +653,21 @@ export default function Delivery() {
                       <td className="px-4 py-3 text-center">
                         {s.ship_status === "PENDING" ? (
                           <div className="inline-flex gap-2">
-                            <PosButton variant="red" className="px-3 py-1" onClick={async () => { await setOrderShipStatus(s.id, "CLOSED"); loadShip(shipTab); }}>
+                            <PosButton
+                              variant="red"
+                              className="px-3 py-1"
+                              onClick={async () => { await setOrderShipStatus(s.id, "CLOSED"); loadShip(shipTab); }}
+                            >
                               Close
                             </PosButton>
                           </div>
                         ) : (
                           <div className="inline-flex gap-2">
-                            <PosButton variant="black" className="px-3 py-1" onClick={async () => { await setOrderShipStatus(s.id, "PENDING"); loadShip(shipTab); }}>
+                            <PosButton
+                              variant="black"
+                              className="px-3 py-1"
+                              onClick={async () => { await setOrderShipStatus(s.id, "PENDING"); loadShip(shipTab); }}
+                            >
                               Reopen
                             </PosButton>
                           </div>

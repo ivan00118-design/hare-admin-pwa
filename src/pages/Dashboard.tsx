@@ -24,7 +24,6 @@ const todayKey = () => dateKey(new Date());
 export default function Dashboard() {
   const [picked, setPicked] = useState(todayKey());
 
-  // Supabase 抓「選取日的前3天 ~ 選取日」、僅取未作廢
   const [rows, setRows] = useState<any[]>([]);
   const [loading, setLoading] = useState(false);
 
@@ -33,7 +32,7 @@ export default function Dashboard() {
     if (Number.isNaN(base.getTime())) return;
 
     const from = new Date(base);
-    from.setDate(base.getDate() - 3); // 最近 4 天視窗
+    from.setDate(base.getDate() - 3); // 最近 4 天
 
     const to = new Date(base); // 當天
 
@@ -41,7 +40,7 @@ export default function Dashboard() {
     fetchOrders({
       from,
       to,
-      status: "active", // 只取未作廢
+      status: "active",
       page: 0,
       pageSize: 1000,
     })
@@ -49,37 +48,15 @@ export default function Dashboard() {
       .finally(() => setLoading(false));
   }, [picked]);
 
-  // 有效訂單（保險：再排除 voided）
   const validOrders = useMemo(() => rows.filter((o: any) => !o?.voided), [rows]);
-
-  // 當日訂單
   const ordersOfDay = useMemo(
     () => validOrders.filter((o: any) => dateKey(o.createdAt) === picked),
     [validOrders, picked]
   );
 
-  // Dashboard.tsx —— 用這段取代原本的 isDeliveryOrder
-  const isDeliveryOrder = (o: any) => {
-  // 1) 以 DB 的布林旗標為最高優先
-    const flag = (typeof o?.isDelivery === "boolean")
-      ? o.isDelivery
-      : (typeof o?.is_delivery === "boolean" ? o.is_delivery : null);
-    if (flag === true) return true;
-    if (flag === false) return false;
+  // 僅以 channel 判定
+  const isDeliveryOrder = (o: any) => (o?.channel === "DELIVERY");
 
-  // 2) 有 delivery json（舊欄位 delivery 或新欄位 delivery_info）就視為外送
-    const hasDeliveryJson = !!(o?.deliveryInfo ?? o?.delivery_info ?? o?.delivery);
-    if (hasDeliveryJson) return true;
-
-  // 3) 有外送運費（>0）就視為外送
-    const fee = Number(o?.deliveryFee ?? o?.delivery_fee ?? 0);
-    if (Number.isFinite(fee) && fee > 0) return true;
-
-    return false; // 預設當作店內單
-  };
-
-
-  // 拆分營收 + 計數
   const byType = useMemo(() => {
     let orderRevenue = 0, deliveryRevenue = 0;
     let orderCount = 0, deliveryCount = 0;
@@ -102,12 +79,10 @@ export default function Dashboard() {
     };
   }, [ordersOfDay]);
 
-  // AOV（All / Order / Delivery）
   const dayAOV = byType.dayCount ? byType.dayRevenue / byType.dayCount : 0;
   const orderAOV = byType.orderCount ? byType.orderRevenue / byType.orderCount : 0;
   const deliveryAOV = byType.deliveryCount ? byType.deliveryRevenue / byType.deliveryCount : 0;
 
-  // Payment Breakdown（當日）
   const paymentTotals = useMemo(() => {
     const map = new Map<string, number>();
     for (const o of ordersOfDay as any[]) {
@@ -117,7 +92,6 @@ export default function Dashboard() {
     return Array.from(map.entries()).sort((a, b) => b[1] - a[1]);
   }, [ordersOfDay]);
 
-  // Coffee Beans Sold（by type）
   const beanStats = useMemo(() => {
     const map = new Map<string, { qty: number; revenue: number; variants: Map<number, number> }>();
     for (const o of ordersOfDay as any[]) {
@@ -137,7 +111,6 @@ export default function Dashboard() {
     return Array.from(map.entries()).sort((a, b) => b[1].revenue - a[1].revenue);
   }, [ordersOfDay]);
 
-  // 最近 4 天（日營收/筆數）
   const last4 = useMemo(() => {
     const base = new Date(picked);
     if (Number.isNaN(base.getTime())) return [];
@@ -153,17 +126,12 @@ export default function Dashboard() {
       if (!days.includes(k)) continue;
       group.set(k, {
         revenue: (group.get(k)?.revenue || 0) + (Number(o.total) || 0),
-        count: (group.get(k)?.count || 0) + 1,
+        count: (group.get(k)?.count || 0) + 1
       });
     }
-    return days.map((k) => ({
-      day: k,
-      revenue: group.get(k)?.revenue || 0,
-      count: group.get(k)?.count || 0,
-    }));
+    return days.map((k) => ({ day: k, revenue: group.get(k)?.revenue || 0, count: group.get(k)?.count || 0 }));
   }, [validOrders, picked]);
 
-  // 交班訊息
   const buildShiftSummary = () => {
     const lines: string[] = [];
     lines.push(`Shift Summary — ${picked}`);
@@ -194,9 +162,7 @@ export default function Dashboard() {
     const text = buildShiftSummary();
     try { await navigator.clipboard.writeText(text); } catch {}
     const to = String(WHATSAPP_PHONE || "").replace(/[^\d]/g, "");
-    const url = to
-      ? `https://wa.me/${to}?text=${encodeURIComponent(text)}`
-      : `https://wa.me/?text=${encodeURIComponent(text)}`;
+    const url = to ? `https://wa.me/${to}?text=${encodeURIComponent(text)}` : `https://wa.me/?text=${encodeURIComponent(text)}`;
     window.open(url, "_blank", "noopener,noreferrer");
   };
 
@@ -224,7 +190,7 @@ export default function Dashboard() {
         </div>
       </div>
 
-      {/* KPI：Order / Delivery 拆分 + 各自 Count/AOV */}
+      {/* KPI */}
       <div className="grid grid-cols-1 sm:grid-cols-4 gap-4 mb-6">
         <div className="bg-white border border-gray-200 rounded-xl p-4 shadow">
           <div className="text-sm text-gray-500">Order Revenue</div>
@@ -269,7 +235,7 @@ export default function Dashboard() {
         )}
       </div>
 
-      {/* Coffee Beans Sold (by type) */}
+      {/* Coffee Beans Sold */}
       <div className="bg-white border border-gray-200 rounded-xl p-4 shadow">
         <h2 className="text-lg font-extrabold mb-3">Coffee Beans Sold (by type)</h2>
         {beanStats.length === 0 ? (
@@ -306,7 +272,7 @@ export default function Dashboard() {
         )}
       </div>
 
-      {/* 最近 4 天 */}
+      {/* Last 4 days */}
       <div className="mt-6 bg-white border border-gray-200 rounded-xl p-4 shadow">
         <h2 className="text-lg font-extrabold mb-3">Last 4 days</h2>
         <div className="overflow-x-auto">
