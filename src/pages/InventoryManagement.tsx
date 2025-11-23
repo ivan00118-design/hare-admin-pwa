@@ -1,9 +1,8 @@
-// src/pages/InventoryManagement.tsx
 import React from "react";
 import PosButton from "../components/PosButton.jsx";
 import { fetchInventoryRows } from "../services/inventory";
 
-/** 與 v_inventory 對應的列型別 */
+/** 與 v_inventory 對齊的列型別 */
 type Row = {
   sku: string;
   name: string;
@@ -12,15 +11,16 @@ type Row = {
   grams: number | null;
   usage_per_cup: number | null;
   price: number | null;
-  stock_kg: number | null; // 可能為 null，前端以 0 安全處理
+  stock_kg: number | null;
 };
 
-/** 顯示金額/數值：可接受 number | null | undefined，避免 TS 抱怨 */
+/** 數字格式化（最多兩位小數，去尾零） */
 const fmt = (n: number | null | undefined) => {
   const v = Number(n) || 0;
   const r = Math.round((v + Number.EPSILON) * 100) / 100;
   return Number.isInteger(r) ? String(r) : r.toFixed(2).replace(/0+$/, "").replace(/\.$/, "");
 };
+const nz = (n: number | null | undefined) => Number(n) || 0;
 
 export default function InventoryManagement() {
   const [rows, setRows] = React.useState<Row[]>([]);
@@ -30,11 +30,12 @@ export default function InventoryManagement() {
   const refresh = React.useCallback(async () => {
     setLoading(true);
     try {
-      const data = (await fetchInventoryRows()) as Row[]; // 來自 v_inventory
+      const data = (await fetchInventoryRows()) as Row[] | null | undefined;
       setRows(Array.isArray(data) ? data : []);
       setUpdatedAt(new Date().toLocaleString());
     } catch (e) {
       console.error("[Inventory] refresh failed:", e);
+      setRows([]);
     } finally {
       setLoading(false);
     }
@@ -44,46 +45,25 @@ export default function InventoryManagement() {
     refresh();
   }, [refresh]);
 
-  // ---- KPI 彙總（useMemo 降低重算）----
-  const { totalKg, drinksKg, beansKg, espressoKg, singleOriginKg } = React.useMemo(() => {
-    const safe = (x: number | null | undefined) => Number(x) || 0;
+  // ===== KPI（彙總）=====
+  const totalKg = rows.reduce((s, r) => s + nz(r.stock_kg), 0);
+  const drinksKg = rows
+    .filter((r) => r.category === "drinks")
+    .reduce((s, r) => s + nz(r.stock_kg), 0);
+  const beansKg = rows
+    .filter((r) => r.category === "HandDrip")
+    .reduce((s, r) => s + nz(r.stock_kg), 0);
+  const espressoKg = rows
+    .filter((r) => r.sub_key === "espresso")
+    .reduce((s, r) => s + nz(r.stock_kg), 0);
+  const singleOriginKg = rows
+    .filter((r) => r.sub_key === "singleOrigin")
+    .reduce((s, r) => s + nz(r.stock_kg), 0);
 
-    const _totalKg = rows.reduce((s, r) => s + safe(r.stock_kg), 0);
-    const _drinksKg = rows
-      .filter((r) => r.category === "drinks")
-      .reduce((s, r) => s + safe(r.stock_kg), 0);
-    const _beansKg = rows
-      .filter((r) => r.category === "HandDrip")
-      .reduce((s, r) => s + safe(r.stock_kg), 0);
-    const _espressoKg = rows
-      .filter((r) => r.sub_key === "espresso")
-      .reduce((s, r) => s + safe(r.stock_kg), 0);
-    const _singleOriginKg = rows
-      .filter((r) => r.sub_key === "singleOrigin")
-      .reduce((s, r) => s + safe(r.stock_kg), 0);
-
-    return {
-      totalKg: _totalKg,
-      drinksKg: _drinksKg,
-      beansKg: _beansKg,
-      espressoKg: _espressoKg,
-      singleOriginKg: _singleOriginKg,
-    };
-  }, [rows]);
-
-  // ---- 區塊明細 ----
-  const espressoRows = React.useMemo(
-    () => rows.filter((r) => r.category === "drinks" && r.sub_key === "espresso"),
-    [rows]
-  );
-  const singleRows = React.useMemo(
-    () => rows.filter((r) => r.category === "drinks" && r.sub_key === "singleOrigin"),
-    [rows]
-  );
-  const beanRows = React.useMemo(
-    () => rows.filter((r) => r.category === "HandDrip"),
-    [rows]
-  );
+  // ===== 區塊明細 =====
+  const espressoRows = rows.filter((r) => r.category === "drinks" && r.sub_key === "espresso");
+  const singleRows = rows.filter((r) => r.category === "drinks" && r.sub_key === "singleOrigin");
+  const beanRows = rows.filter((r) => r.category === "HandDrip");
 
   return (
     <div className="p-6 bg-gray-50 min-h-screen" style={{ colorScheme: "light" }}>
@@ -96,6 +76,7 @@ export default function InventoryManagement() {
             className="!bg-white !text-black !border !border-gray-300"
             onClick={refresh}
             disabled={loading}
+            title="Reload inventory from DB"
           >
             Refresh
           </PosButton>
