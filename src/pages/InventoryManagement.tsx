@@ -1,10 +1,9 @@
 // src/pages/InventoryManagement.tsx
 import React, { useEffect, useMemo, useState } from "react";
 import PosButton from "../components/PosButton.jsx";
-import { fetchStockTotals } from "../services/inventory";
-import { supabase } from "../supabaseClient";
+import { fetchStockTotals, type StockTotals } from "../services/inventory";
 
-const fmt = (n: number) => {
+const fmtKg = (n: number) => {
   const v = Number(n) || 0;
   const r = Math.round((v + Number.EPSILON) * 100) / 100;
   return Number.isInteger(r) ? String(r) : r.toFixed(2).replace(/0+$/, "").replace(/\.$/, "");
@@ -12,21 +11,21 @@ const fmt = (n: number) => {
 
 export default function InventoryManagement() {
   const [loading, setLoading] = useState(false);
-  const [totals, setTotals] = useState<{
-    totalKg: number;
-    drinksKg: number;
-    beansKg: number;
-    espressoKg: number;
-    singleOriginKg: number;
-  } | null>(null);
+  const [err, setErr] = useState<string | null>(null);
+  const [totals, setTotals] = useState<StockTotals | null>(null);
+  const [refreshedAt, setRefreshedAt] = useState<string>("");
 
   const load = async () => {
     setLoading(true);
+    setErr(null);
     try {
       const t = await fetchStockTotals();
+      // 直接設成完整的 StockTotals（包含 espressoKg / singleOriginKg）
       setTotals(t);
-    } catch (e) {
-      console.error("[InventoryManagement] load totals failed:", e);
+      setRefreshedAt(new Date().toLocaleString());
+    } catch (e: any) {
+      console.error("[InventoryManagement] fetchStockTotals failed:", e);
+      setErr(e?.message ?? "Failed to load stock totals");
     } finally {
       setLoading(false);
     }
@@ -34,100 +33,77 @@ export default function InventoryManagement() {
 
   useEffect(() => {
     load();
-
-    // 訂閱 Realtime：有庫存/訂單異動 → 重新拉取
-    const ch = supabase
-      .channel("inv_totals")
-      .on(
-        "postgres_changes",
-        { event: "*", schema: "public", table: "product_inventory" },
-        () => load()
-      )
-      .on(
-        "postgres_changes",
-        { event: "*", schema: "public", table: "stock_ledger" },
-        () => load()
-      )
-      .on(
-        "postgres_changes",
-        { event: "*", schema: "public", table: "order_items" },
-        () => load()
-      )
-      .subscribe();
-
-    return () => {
-      supabase.removeChannel(ch);
-    };
   }, []);
 
   const cards = useMemo(() => {
-    const t = totals || { totalKg: 0, drinksKg: 0, beansKg: 0, espressoKg: 0, singleOriginKg: 0 };
+    const z = totals || {
+      totalKg: 0,
+      drinksKg: 0,
+      beansKg: 0,
+      espressoKg: 0,
+      singleOriginKg: 0,
+    };
     return [
       {
         title: "Total Stock (kg)",
-        value: t.totalKg,
-        accent: "#111",
-        help: "v_inventory → sum(stock_kg)",
+        value: z.totalKg,
+        highlight: true,
+        note: "",
       },
       {
-        title: "Drinks Stock (kg)",
-        value: t.drinksKg,
-        accent: "#0ea5e9",
-        help: "Espresso / Single Origin 合計",
+        title: "Drinks (kg)",
+        value: z.drinksKg,
+        note: `Espresso ${fmtKg(z.espressoKg)} · Single Origin ${fmtKg(z.singleOriginKg)}`,
       },
       {
-        title: "Beans Stock (kg)",
-        value: t.beansKg,
-        accent: "#22c55e",
-        help: "HandDrip（包裝豆）合計",
-      },
-      {
-        title: "— Espresso (kg)",
-        value: t.espressoKg,
-        accent: "#6366f1",
-        help: "Drinks 中 espresso",
-      },
-      {
-        title: "— Single Origin (kg)",
-        value: t.singleOriginKg,
-        accent: "#f59e0b",
-        help: "Drinks 中 single origin",
+        title: "Coffee Beans (kg)",
+        value: z.beansKg,
+        note: "",
       },
     ];
   }, [totals]);
 
   return (
     <div className="p-6 bg-gray-50 min-h-screen" style={{ colorScheme: "light" }}>
-      <div className="flex items-center gap-3 mb-4">
+      <div className="flex items-end gap-3 mb-4">
         <h1 className="text-2xl font-extrabold">Inventory Management</h1>
-        <div className="ml-auto">
+        <div className="ml-auto flex items-center gap-2">
+          {refreshedAt ? (
+            <span className="text-xs text-gray-500">Updated: {refreshedAt}</span>
+          ) : null}
           <PosButton
             variant="confirm"
             className="!bg-white !text-black !border !border-gray-300 shadow hover:!bg-gray-100 active:!bg-gray-200 focus:!ring-2 focus:!ring-black"
+            style={{ colorScheme: "light" }}
             onClick={load}
             disabled={loading}
-            title="Reload from DB"
           >
-            ↻ Refresh
+            {loading ? "Loading…" : "Refresh"}
           </PosButton>
         </div>
       </div>
 
-      <div className="grid grid-cols-1 sm:grid-cols-3 lg:grid-cols-5 gap-4">
+      {err ? (
+        <div className="mb-4 p-3 rounded border border-red-300 bg-red-50 text-red-700 text-sm">
+          {err}
+        </div>
+      ) : null}
+
+      <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
         {cards.map((c) => (
-          <div key={c.title} className="bg-white border border-gray-200 rounded-xl p-4 shadow">
+          <div
+            key={c.title}
+            className={`bg-white border border-gray-200 rounded-xl p-4 shadow ${
+              c.highlight ? "ring-2 ring-red-200" : ""
+            }`}
+          >
             <div className="text-sm text-gray-500">{c.title}</div>
-            <div className="mt-1 text-2xl font-extrabold" style={{ color: c.accent }}>
-              {loading && totals === null ? "…" : fmt(c.value)}
+            <div className={`mt-1 text-2xl font-extrabold ${c.highlight ? "text-[#dc2626]" : "text-[#111]"}`}>
+              {fmtKg(c.value)}
             </div>
-            <div className="mt-1 text-xs text-gray-500">{c.help}</div>
+            {c.note ? <div className="mt-1 text-xs text-gray-500">{c.note}</div> : null}
           </div>
         ))}
-      </div>
-
-      <div className="mt-6 text-sm text-gray-500">
-        ※ 本頁面每次開啟或偵測到 DB 異動（product_inventory / stock_ledger / order_items）都會自動重新計算，
-        不依賴前端暫存，因此不會再出現「刷新後歸 0」的情況。
       </div>
     </div>
   );

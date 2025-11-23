@@ -1,7 +1,9 @@
 // src/services/inventory.ts
 import { supabase } from "../supabaseClient";
 
-/* ========= DB 視圖 v_inventory ========= */
+/* =========================
+ * 型別：DB 端 v_inventory
+ * ========================= */
 export type InventoryRow = {
   sku: string;
   name: string;
@@ -14,24 +16,29 @@ export type InventoryRow = {
   stock_kg: number | null;
 };
 
-/* ========= 讀取 v_inventory ========= */
+/* =========================
+ * 讀取 v_inventory（產品 + 目前庫存）
+ * ========================= */
 export async function fetchInventoryRows(): Promise<InventoryRow[]> {
   const { data, error } = await supabase.from("v_inventory").select("*");
   if (error) throw error;
-  return (data || []) as InventoryRow[];
+  return (data ?? []) as InventoryRow[];
 }
 
-/* ========= 映射成 UI 目前的 Inventory 形狀 ========= */
+/* =========================
+ * 對應到 UI 目前的 Inventory 形狀
+ * ========================= */
 export type UIDrink = {
   id: string;
   name: string;
   price: number;
   usagePerCup: number; // kg per cup
-  stock: number;       // kg
+  stock: number; // kg
   unit: "kg";
   category: "drinks";
   subKey: "espresso" | "singleOrigin";
 };
+
 export type UIBean = {
   id: string;
   name: string;
@@ -41,6 +48,7 @@ export type UIBean = {
   unit: "kg";
   category: "HandDrip";
 };
+
 export type UIInventory = {
   store: {
     drinks: {
@@ -93,8 +101,9 @@ export function rowsToUIInventory(rows: InventoryRow[]): UIInventory {
   return { store: { drinks: { espresso, singleOrigin }, HandDrip: beans } };
 }
 
-/* ========= 商品 upsert（避免 PGRST203） =========
-   關鍵：只送該簽章會用到的參數 key；另一組 key 完全不送！ */
+/* =========================
+ * 商品 upsert（用 RPC；避免 PGRST203）
+ * ========================= */
 export async function upsertProduct(p: {
   sku: string;
   name: string;
@@ -104,60 +113,29 @@ export async function upsertProduct(p: {
   usage_per_cup?: number | null;
   price?: number | null;
 }) {
-  const cat = p.category;
-
-  // 組裝 payload（只包含對應簽章的 key）
-  const base = {
+  const { error } = await supabase.rpc("upsert_product", {
     p_sku: p.sku,
     p_name: p.name,
-    p_category: cat,
+    p_category: p.category,
+    p_sub_key: p.sub_key ?? null,
+    p_grams: p.grams ?? null,
+    p_usage_per_cup: p.usage_per_cup ?? null,
     p_price: p.price ?? null,
-  } as Record<string, any>;
-
-  if (cat === "drinks") {
-    base.p_sub_key = p.sub_key ?? null;
-    base.p_usage_per_cup = p.usage_per_cup ?? 0.02;
-    // **不要**加 p_grams
-  } else {
-    base.p_grams = p.grams ?? null;
-    // **不要**加 p_sub_key / p_usage_per_cup
-  }
-
-  // 先試統一名稱 upsert_product（多簽章但已靠 key 唯一化）
-  let { error } = await supabase.rpc("upsert_product", base);
-  if (!error) return;
-
-  // 若仍報 PGRST203（或沒有該函式），嘗試呼叫明確包裝函式
-  const code = (error as any)?.code;
-  if (code === "PGRST203" || code === "42883") {
-    if (cat === "drinks") {
-      const { error: e2 } = await supabase.rpc("upsert_product_drink", {
-        p_sku: p.sku,
-        p_name: p.name,
-        p_sub_key: p.sub_key ?? null,
-        p_usage_per_cup: p.usage_per_cup ?? 0.02,
-        p_price: p.price ?? null,
-      });
-      if (e2) throw e2;
-      return;
-    } else {
-      const { error: e2 } = await supabase.rpc("upsert_product_bean", {
-        p_sku: p.sku,
-        p_name: p.name,
-        p_grams: p.grams ?? null,
-        p_price: p.price ?? null,
-      });
-      if (e2) throw e2;
-      return;
-    }
-  }
-
-  // 其他錯誤照拋
-  throw error;
+    // 加上長版簽名的參數，打破函式重載歧義
+    p_extra_info: null,
+    p_fail_when_insufficient: false,
+  });
+  if (error) throw error;
 }
 
-/* ========= 手動調整庫存 ========= */
-export async function adjustStock(sku: string, deltaKg: number, note?: string) {
+/* =========================
+ * 手動調整庫存（RPC）
+ * ========================= */
+export async function adjustStock(
+  sku: string,
+  deltaKg: number,
+  note?: string
+) {
   const { error } = await supabase.rpc("adjust_stock", {
     p_sku: sku,
     p_delta_kg: deltaKg,
@@ -167,56 +145,110 @@ export async function adjustStock(sku: string, deltaKg: number, note?: string) {
   if (error) throw error;
 }
 
-/* ========= 刪除商品（會連動清理 FK） ========= */
+/* =========================
+ * 刪除商品（SKU）
+ * ========================= */
 export async function deleteProduct(sku: string) {
-  const { error } = await supabase.from("product_catalog").delete().eq("sku", sku);
+  const { error } = await supabase
+    .from("product_catalog")
+    .delete()
+    .eq("sku", sku);
   if (error) throw error;
 }
 
-/* ========= 安全「變更豆子克數」流程 =========
-   upsert 新 SKU → 舊 SKU 的庫存轉到新 SKU（adjust_stock 兩筆）→ 刪除舊 SKU */
-export async function changeBeanPackSizeSafe(params: {
+/* =========================
+ * Beans 變更克數（安全流程）
+ * upsert 新 SKU → 轉移庫存（兩筆 adjust_stock）
+ * → 刪除舊 SKU → 回傳新 SKU
+ * ========================= */
+export async function changeBeanPackSizeSafe(input: {
   oldSku: string;
-  oldStockKg?: number | null; // 可不傳，會自動查
   name: string;
   price: number;
-  newGrams: number; // 100 / 250 / 500 / 1000
-}) {
-  const { oldSku, oldStockKg, name, price, newGrams } = params;
-
-  // 推導新 SKU：把尾巴的 "-{N}g" 改成新克數；若舊的不符規則就直接附上
-  const base = oldSku.replace(/-\d+g$/i, "");
-  const newSku = `${base}-${newGrams}g`;
-
-  // 取得舊庫存（若未提供）
-  let stock = Number(oldStockKg ?? NaN);
-  if (!Number.isFinite(stock)) {
-    const { data, error } = await supabase
+  newGrams: number;
+  oldStockKg?: number; // 若未提供，會自動讀 v_inventory
+}): Promise<string> {
+  // 讀取舊 SKU 的現有庫存（若呼叫端未提供）
+  let oldStockKg = typeof input.oldStockKg === "number" ? input.oldStockKg : 0;
+  if (typeof input.oldStockKg !== "number") {
+    const { data: found, error } = await supabase
       .from("v_inventory")
       .select("stock_kg")
-      .eq("sku", oldSku)
+      .eq("sku", input.oldSku)
       .maybeSingle();
     if (error) throw error;
-    stock = Number((data as any)?.stock_kg ?? 0);
+    oldStockKg = Number(found?.stock_kg ?? 0);
   }
 
-  // 1) upsert 新 SKU（豆類）
+  // 產生新 SKU：沿用舊 SKU 前綴 + 新 grams + 隨機尾碼避免碰撞
+  const prefix = input.oldSku.split("-")[0] || input.oldSku;
+  const rnd =
+    typeof crypto !== "undefined" && "randomUUID" in crypto
+      ? (crypto as any).randomUUID().slice(0, 8)
+      : Math.random().toString(36).slice(2, 10);
+  const newSku = `${prefix}-${input.newGrams}g-${rnd}`;
+
+  // 1) 建立新 SKU / 更新基本資料
   await upsertProduct({
     sku: newSku,
-    name,
+    name: input.name,
     category: "HandDrip",
-    grams: newGrams,
-    price,
+    grams: input.newGrams,
+    price: input.price,
   });
 
-  // 2) 搬庫存（兩筆調整，保留追蹤）
-  if (stock > 0) {
-    await adjustStock(oldSku, -stock, `MIGRATE_TO ${newSku}`);
-    await adjustStock(newSku, +stock, `MIGRATE_FROM ${oldSku}`);
+  // 2) 轉移庫存（若有庫存才轉）
+  const moved = Number(oldStockKg || 0);
+  if (moved > 0) {
+    await adjustStock(input.oldSku, -moved, `MIGRATE_PACK_SIZE → ${newSku}`);
+    await adjustStock(newSku, moved, `MIGRATE_PACK_SIZE from ${input.oldSku}`);
   }
 
-  // 3) 刪掉舊 SKU
-  await deleteProduct(oldSku);
+  // 3) 刪除舊 SKU
+  await deleteProduct(input.oldSku);
 
   return newSku;
+}
+
+/* =========================
+ * 庫存彙總（完全 DB 化）
+ * 提供給 InventoryManagement 畫面
+ * ========================= */
+export type StockTotals = {
+  totalKg: number;
+  drinksKg: number;
+  beansKg: number;
+  espressoKg: number;
+  singleOriginKg: number;
+};
+
+export async function fetchStockTotals(): Promise<StockTotals> {
+  const { data, error } = await supabase
+    .from("v_inventory")
+    .select("category, sub_key, stock_kg");
+  if (error) throw error;
+
+  let totalKg = 0;
+  let drinksKg = 0;
+  let beansKg = 0;
+  let espressoKg = 0;
+  let singleOriginKg = 0;
+
+  for (const r of (data ?? []) as Array<{
+    category: InventoryRow["category"];
+    sub_key: InventoryRow["sub_key"];
+    stock_kg: number | null;
+  }>) {
+    const s = Number(r.stock_kg ?? 0);
+    totalKg += s;
+    if (r.category === "drinks") {
+      drinksKg += s;
+      if (r.sub_key === "espresso") espressoKg += s;
+      if (r.sub_key === "singleOrigin") singleOriginKg += s;
+    } else if (r.category === "HandDrip") {
+      beansKg += s;
+    }
+  }
+
+  return { totalKg, drinksKg, beansKg, espressoKg, singleOriginKg };
 }

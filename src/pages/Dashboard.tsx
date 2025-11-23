@@ -24,7 +24,7 @@ const todayKey = () => dateKey(new Date());
 export default function Dashboard() {
   const [picked, setPicked] = useState(todayKey());
 
-  // 從 Supabase 載入資料（抓「選取日的前3天 ~ 選取日」且只取未作廢）
+  // 從 Supabase 載入資料（抓「選取日的前3天 ~ 選取日」，只取未作廢）
   const [rows, setRows] = useState<any[]>([]);
   const [loading, setLoading] = useState(false);
 
@@ -34,8 +34,7 @@ export default function Dashboard() {
 
     const from = new Date(base);
     from.setDate(base.getDate() - 3); // 最近 4 天視窗
-
-    const to = new Date(base); // 當天
+    const to = new Date(base);        // 當天
 
     setLoading(true);
     fetchOrders({
@@ -49,25 +48,33 @@ export default function Dashboard() {
       .finally(() => setLoading(false));
   }, [picked]);
 
+  // 只留未作廢（保險再次過濾）
   const validOrders = useMemo(() => rows.filter((o: any) => !o?.voided), [rows]);
+
+  // 只取選定日
   const ordersOfDay = useMemo(
     () => validOrders.filter((o: any) => dateKey(o.createdAt) === picked),
     [validOrders, picked]
   );
 
-  // 更健壯的 Delivery 判斷
-  const isDeliveryOrder = (o: any) =>
-  typeof o?.isDelivery === "boolean"
-    ? o.isDelivery
-    : (o?.channel === "DELIVERY")
-      ? true
-      : !!(
-          (o?.delivery && Object.keys(o.delivery || {}).length > 0) ||
-          (o?.deliveryInfo && Object.keys(o.deliveryInfo || {}).length > 0) ||
-          (Number(o?.delivery_fee ?? o?.deliveryFee) || 0) > 0
-        );
+  /**
+   * ✅ 統一的 Delivery 判斷（多制式相容）
+   * - 若 service 已提供 isDelivery（boolean），直接使用
+   * - 否則依序判斷 channel / is_delivery / delivery_info / delivery
+   *   任何一者存在表示外送單
+   */
+  const isDeliveryOrder = (o: any) => {
+    if (typeof o?.isDelivery === "boolean") return o.isDelivery;
+    if (o && typeof o === "object") {
+      if ("channel" in o) return o.channel === "DELIVERY";
+      if ("is_delivery" in o) return !!(o as any).is_delivery;
+      if ("delivery_info" in o) return !!(o as any).delivery_info;
+      if ("delivery" in o) return !!(o as any).delivery;
+    }
+    return false;
+  };
 
-  // 拆分營收 + 計數
+  // 拆分營收 / 筆數
   const byType = useMemo(() => {
     let orderRevenue = 0, deliveryRevenue = 0;
     let orderCount = 0, deliveryCount = 0;
@@ -90,6 +97,7 @@ export default function Dashboard() {
     };
   }, [ordersOfDay]);
 
+  // AOV（All / Order / Delivery）
   const dayAOV = byType.dayCount ? byType.dayRevenue / byType.dayCount : 0;
   const orderAOV = byType.orderCount ? byType.orderRevenue / byType.orderCount : 0;
   const deliveryAOV = byType.deliveryCount ? byType.deliveryRevenue / byType.deliveryCount : 0;
@@ -146,7 +154,7 @@ export default function Dashboard() {
     return days.map((k) => ({ day: k, revenue: group.get(k)?.revenue || 0, count: group.get(k)?.count || 0 }));
   }, [validOrders, picked]);
 
-  // 交班訊息
+  // 交班訊息（含 Order/Delivery 的 Count 與 AOV）
   const buildShiftSummary = () => {
     const lines: string[] = [];
     lines.push(`Shift Summary — ${picked}`);
