@@ -10,6 +10,7 @@ import Delivery from "./pages/Delivery";
 import History from "./pages/History";
 import InventoryManagement from "./pages/InventoryManagement";
 import Login from "./auth/Login";
+import Reports from "./pages/Reports";
 import "./index.css";
 
 const router = createBrowserRouter([
@@ -25,6 +26,7 @@ const router = createBrowserRouter([
       { path: "dashboard", element: <Dashboard /> },
       { path: "inventory", element: <InventoryManagement /> },
       { path: "orders", element: <SalesDashboard /> },
+      { path: "reports", element: <Reports /> },
       { path: "history", element: <History /> },
       { path: "delivery", element: <Delivery /> },
     ]
