@@ -3,7 +3,7 @@ import React, { useEffect, useMemo, useState } from "react";
 import PosButton from "../components/PosButton.jsx";
 import { fetchOrders } from "../services/orders";
 
-const WHATSAPP_PHONE = import.meta?.env?.VITE_WHATSAPP_PHONE || "85366396803";
+const WHATSAPP_PHONE = import.meta?.env?.VITE_WHATSAPP_PHONE || "";
 
 // ---- utils -------------------------------------------------
 const fmtMoney = (n: number) => {
