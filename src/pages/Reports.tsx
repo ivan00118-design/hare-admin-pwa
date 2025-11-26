@@ -197,8 +197,6 @@ const Reports: React.FC = () => {
         </div>
 
         <p className="text-xs text-gray-500">
-          會依照上面的日期與狀態篩選條件，匯出與 History 頁面相同來源的訂單摘要
-          （最多約 5000 筆）。如果之後需要更細項（比如每個品項的明細），可以再另外做一個細版匯出。
         </p>
       </div>
     </div>
