@@ -145,7 +145,7 @@ const Reports: React.FC = () => {
 
       <div className="border rounded-xl p-4 bg-white shadow-sm max-w-3xl">
         <h2 className="text-base font-semibold mb-3">
-          匯出歷史訂單（與 History 頁面相同來源）
+          匯出歷史訂單
         </h2>
 
         <div className="flex flex-wrap items-end gap-4 mb-3">
