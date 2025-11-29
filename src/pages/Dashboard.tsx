@@ -5,7 +5,7 @@ import { fetchOrders } from "../services/orders";
 // 取得環境變數
 const WHATSAPP_PHONE = import.meta?.env?.VITE_WHATSAPP_PHONE || "";
 
-// ---- utils (保留原本邏輯) -------------------------------------------------
+// ---- utils -------------------------------------------------
 const fmtMoney = (n: number) => {
   const v = Number(n) || 0;
   const r = Math.round((v + Number.EPSILON) * 100) / 100;
@@ -26,6 +26,7 @@ function orderDayKey(o: any): string {
   if (!raw) return "";
 
   if (raw instanceof Date) return toDayKey(raw);
+  if (typeof raw === 'number') return toDayKey(new Date(raw));
 
   const s = String(raw);
 
@@ -54,17 +55,17 @@ function isDeliveryOrder(o: any): boolean {
 }
 
 // ------------------------------------------------------------
-// 新增的 UI 元件：統計卡片
+// UI Components
 // ------------------------------------------------------------
-const StatCard = ({ title, value, subValue, icon, accentColor = "text-slate-900" }: any) => (
-  <div className="bg-white p-5 rounded-2xl shadow-[0_2px_8px_rgba(0,0,0,0.04)] border border-slate-100 flex flex-col justify-between h-36 active:scale-[0.98] transition-transform duration-200">
+const StatCard = ({ title, value, subValue, icon, accentColor = "text-gray-900" }: any) => (
+  <div className="bg-white p-5 rounded-2xl shadow-[0_2px_8px_rgba(0,0,0,0.04)] border border-gray-100 flex flex-col justify-between h-36 active:scale-[0.98] transition-transform duration-200">
     <div className="flex justify-between items-start">
-      <span className="text-slate-500 text-xs font-bold uppercase tracking-wider">{title}</span>
+      <span className="text-gray-500 text-xs font-bold uppercase tracking-wider">{title}</span>
       <span className="text-2xl filter drop-shadow-sm">{icon}</span>
     </div>
     <div className="mt-auto">
       <h3 className={`text-2xl font-bold ${accentColor} tracking-tight`}>{value}</h3>
-      {subValue && <p className="text-xs text-slate-400 mt-1 font-medium">{subValue}</p>}
+      {subValue && <p className="text-xs text-gray-400 mt-1 font-medium">{subValue}</p>}
     </div>
   </div>
 );
@@ -78,26 +79,33 @@ export default function Dashboard() {
     const base = new Date(picked);
     if (Number.isNaN(base.getTime())) return;
 
+    // 修改：擴大搜尋範圍 (前後7天)，確保不會因時區問題漏掉訂單
     const from = new Date(base);
-    from.setDate(base.getDate() - 3);
+    from.setDate(base.getDate() - 7);
     from.setHours(0, 0, 0, 0);
 
     const to = new Date(base);
-    to.setDate(base.getDate() + 1);
+    to.setDate(base.getDate() + 2); // 多抓兩天比較保險
     to.setHours(0, 0, 0, 0);
 
     setLoading(true);
     fetchOrders({
       from,
       to,
-      status: "active",
+      // 修改：移除 status: "active" 限制，抓取所有訂單後再於前端過濾
+      // 這樣可以避免因為後端狀態定義不同 (如 completed) 而漏單
       page: 0,
-      pageSize: 1000,
+      pageSize: 2000, 
     })
       .then((res) => setRows(Array.isArray(res?.rows) ? res.rows : []))
+      .catch(err => {
+        console.error("Dashboard fetch error:", err);
+        setRows([]);
+      })
       .finally(() => setLoading(false));
   }, [picked]);
 
+  // 過濾掉已作廢 (voided) 的訂單
   const validOrders = useMemo(() => rows.filter((o: any) => !o?.voided), [rows]);
 
   const ordersOfDay = useMemo(
@@ -140,23 +148,41 @@ export default function Dashboard() {
     return Array.from(map.entries()).sort((a, b) => b[1] - a[1]);
   }, [ordersOfDay]);
 
-  const beanStats = useMemo(() => {
-    const map = new Map<string, { qty: number; revenue: number; variants: Map<number, number> }>();
+  // 修改：不再只過濾 HandDrip，而是統計所有銷售商品
+  const itemStats = useMemo(() => {
+    const map = new Map<string, { qty: number; revenue: number; category: string, variants: Map<string, number> }>();
+    
     for (const o of ordersOfDay) {
       for (const it of (o.items || []) as any[]) {
-        if (it?.category !== "HandDrip") continue;
-        const name = (it.name || "").trim();
-        if (!map.has(name)) map.set(name, { qty: 0, revenue: 0, variants: new Map() });
-        const rec = map.get(name)!;
+        // 移除原本的 category 過濾器，讓所有商品都能顯示
+        const name = (it.name || "Unknown").trim();
+        const cat = it.category || "Uncategorized";
+        // 使用 名稱+類別 作為 key，避免同名不同類別混淆
+        const key = `${name}::${cat}`;
+
+        if (!map.has(key)) {
+          map.set(key, { qty: 0, revenue: 0, category: cat, variants: new Map() });
+        }
+        
+        const rec = map.get(key)!;
         const q = Number(it.qty) || 0;
         const price = Number(it.price) || 0;
+        
         rec.qty += q;
         rec.revenue += q * price;
-        const g = Number(it.grams) || 0;
-        rec.variants.set(g, (rec.variants.get(g) || 0) + q);
+
+        // 嘗試抓取規格 (grams 或 variant 屬性)
+        const variantInfo = it.grams ? `${it.grams}g` : (it.variant || "");
+        if (variantInfo) {
+           rec.variants.set(variantInfo, (rec.variants.get(variantInfo) || 0) + q);
+        }
       }
     }
-    return Array.from(map.entries()).sort((a, b) => b[1].revenue - a[1].revenue);
+    
+    // 轉換回陣列並依營收排序
+    return Array.from(map.entries())
+      .map(([k, v]) => ({ name: k.split('::')[0], ...v }))
+      .sort((a, b) => b.revenue - a.revenue);
   }, [ordersOfDay]);
 
   const last4 = useMemo(() => {
@@ -192,15 +218,14 @@ export default function Dashboard() {
     if (paymentTotals.length === 0) lines.push("  - (none)");
     else for (const [method, amt] of paymentTotals) lines.push(`  - ${method}: $ ${fmtMoney(amt)}`);
     lines.push("");
-    lines.push("Coffee Beans Sold (by type):");
-    if (beanStats.length === 0) lines.push("  - (none)");
+    lines.push("Item Sales Breakdown:");
+    if (itemStats.length === 0) lines.push("  - (none)");
     else {
-      for (const [name, rec] of beanStats) {
-        const variants = Array.from(rec.variants.entries())
-          .sort((a, b) => a[0] - b[0])
-          .map(([g, q]) => (g ? `${g}g × ${q}` : `— × ${q}`))
+      for (const item of itemStats) {
+        const variants = Array.from(item.variants.entries())
+          .map(([v, q]) => `${v}×${q}`)
           .join(", ");
-        lines.push(`  - ${name}: Qty ${rec.qty} ${variants ? `(${variants}) ` : ""}— $ ${fmtMoney(rec.revenue)}`);
+        lines.push(`  - [${item.category}] ${item.name}: Qty ${item.qty} ${variants ? `(${variants}) ` : ""}— $ ${fmtMoney(item.revenue)}`);
       }
     }
     return lines.join("\n");
@@ -221,21 +246,21 @@ export default function Dashboard() {
       {/* 頂部標題與控制列 */}
       <header className="flex flex-col md:flex-row md:items-end justify-between gap-4 pb-2">
         <div>
-          <h1 className="text-3xl font-bold text-slate-900 tracking-tight">Dashboard</h1>
-          <p className="text-slate-500 text-sm mt-1 font-medium">Business Overview</p>
+          <h1 className="text-3xl font-bold text-gray-900 tracking-tight">Dashboard</h1>
+          <p className="text-gray-500 text-sm mt-1 font-medium">Business Overview</p>
         </div>
         
-        <div className="flex items-center gap-2 bg-white p-1.5 rounded-xl border border-slate-200 shadow-sm">
+        <div className="flex items-center gap-2 bg-white p-1.5 rounded-xl border border-gray-200 shadow-sm">
           <input
             type="date"
             value={picked}
             onChange={(e) => setPicked(e.target.value)}
-            className="h-10 border-0 bg-transparent text-slate-700 font-semibold focus:ring-0 text-sm px-2 cursor-pointer"
+            className="h-10 border-0 bg-transparent text-gray-700 font-semibold focus:ring-0 text-sm px-2 cursor-pointer outline-none"
           />
-          <div className="h-6 w-px bg-slate-200 mx-1"></div>
+          <div className="h-6 w-px bg-gray-200 mx-1"></div>
           <button
             onClick={sendToWhatsApp}
-            className="h-10 px-4 bg-slate-900 text-white text-sm font-semibold rounded-lg hover:bg-slate-800 active:scale-95 transition-all flex items-center gap-2"
+            className="h-10 px-4 bg-gray-900 text-white text-sm font-semibold rounded-lg hover:bg-gray-800 active:scale-95 transition-all flex items-center gap-2"
             title="Send Summary"
           >
             <span>🧾</span>
@@ -246,15 +271,12 @@ export default function Dashboard() {
 
       {/* 數據卡片區塊 */}
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
-        {/* 訂單營收 */}
         <StatCard 
           title="Order Revenue" 
           value={`$ ${fmtMoney(byType.orderRevenue)}`} 
           subValue={`${byType.orderCount} orders · AOV $${fmtMoney(orderAOV)}`}
           icon="💰" 
         />
-        
-        {/* 外送營收 (強調色) */}
         <StatCard 
           title="Delivery Revenue" 
           value={`$ ${fmtMoney(byType.deliveryRevenue)}`} 
@@ -262,16 +284,12 @@ export default function Dashboard() {
           icon="🛵"
           accentColor="text-rose-600"
         />
-
-        {/* 總訂單數 */}
         <StatCard 
           title="Total Orders" 
           value={byType.dayCount} 
           subValue="Valid orders only"
           icon="🧾" 
         />
-
-        {/* 總平均客單價 */}
         <StatCard 
           title="Avg. Order Value" 
           value={`$ ${fmtMoney(dayAOV)}`} 
@@ -282,21 +300,23 @@ export default function Dashboard() {
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
         {/* Payment Breakdown */}
-        <section className="bg-white rounded-3xl shadow-[0_2px_12px_rgba(0,0,0,0.04)] border border-slate-100 overflow-hidden">
-          <div className="p-5 border-b border-slate-50">
-            <h2 className="font-bold text-lg text-slate-800 flex items-center gap-2">
+        <section className="bg-white rounded-3xl shadow-[0_2px_12px_rgba(0,0,0,0.04)] border border-gray-100 overflow-hidden">
+          <div className="p-5 border-b border-gray-50">
+            <h2 className="font-bold text-lg text-gray-800 flex items-center gap-2">
               <span>💳</span> Payment Breakdown
             </h2>
           </div>
           <div className="p-0">
             {paymentTotals.length === 0 ? (
-              <div className="p-8 text-center text-slate-400 text-sm">No payment records yet.</div>
+              <div className="p-8 text-center text-gray-400 text-sm">
+                {loading ? "Loading..." : "No payment records."}
+              </div>
             ) : (
-              <div className="divide-y divide-slate-50">
+              <div className="divide-y divide-gray-50">
                 {paymentTotals.map(([method, amt]) => (
-                  <div key={method} className="p-4 flex items-center justify-between hover:bg-slate-50/50 transition-colors">
-                    <span className="text-sm font-medium text-slate-700">{method}</span>
-                    <span className="text-sm font-bold text-slate-900 bg-slate-100 px-2 py-1 rounded-md">
+                  <div key={method} className="p-4 flex items-center justify-between hover:bg-gray-50/50 transition-colors">
+                    <span className="text-sm font-medium text-gray-700">{method}</span>
+                    <span className="text-sm font-bold text-gray-900 bg-gray-100 px-2 py-1 rounded-md">
                       MOP$ {fmtMoney(amt)}
                     </span>
                   </div>
@@ -307,20 +327,20 @@ export default function Dashboard() {
         </section>
 
         {/* Last 4 Days Trend */}
-        <section className="bg-white rounded-3xl shadow-[0_2px_12px_rgba(0,0,0,0.04)] border border-slate-100 overflow-hidden">
-          <div className="p-5 border-b border-slate-50">
-            <h2 className="font-bold text-lg text-slate-800 flex items-center gap-2">
+        <section className="bg-white rounded-3xl shadow-[0_2px_12px_rgba(0,0,0,0.04)] border border-gray-100 overflow-hidden">
+          <div className="p-5 border-b border-gray-50">
+            <h2 className="font-bold text-lg text-gray-800 flex items-center gap-2">
               <span>📈</span> Recent Trend
             </h2>
           </div>
-          <div className="divide-y divide-slate-50">
+          <div className="divide-y divide-gray-50">
             {last4.map((d) => (
-              <div key={d.day} className="p-4 flex items-center justify-between hover:bg-slate-50/50">
+              <div key={d.day} className="p-4 flex items-center justify-between hover:bg-gray-50/50">
                 <div className="flex flex-col">
-                  <span className="text-sm font-bold text-slate-800">{d.day}</span>
-                  <span className="text-xs text-slate-400 font-medium">{d.count} Orders</span>
+                  <span className="text-sm font-bold text-gray-800">{d.day}</span>
+                  <span className="text-xs text-gray-400 font-medium">{d.count} Orders</span>
                 </div>
-                <span className={`text-sm font-bold ${d.day === picked ? 'text-blue-600' : 'text-slate-600'}`}>
+                <span className={`text-sm font-bold ${d.day === picked ? 'text-blue-600' : 'text-gray-600'}`}>
                   MOP$ {fmtMoney(d.revenue)}
                 </span>
               </div>
@@ -329,46 +349,54 @@ export default function Dashboard() {
         </section>
       </div>
 
-      {/* Coffee Beans Report */}
-      <section className="bg-white rounded-3xl shadow-[0_2px_12px_rgba(0,0,0,0.04)] border border-slate-100 overflow-hidden">
-        <div className="p-5 border-b border-slate-50 flex justify-between items-center">
-          <h2 className="font-bold text-lg text-slate-800 flex items-center gap-2">
-            <span>☕</span> Coffee Beans Sold
+      {/* Item Sales Report (Replacing Coffee Beans Sold) */}
+      <section className="bg-white rounded-3xl shadow-[0_2px_12px_rgba(0,0,0,0.04)] border border-gray-100 overflow-hidden">
+        <div className="p-5 border-b border-gray-50 flex justify-between items-center">
+          <h2 className="font-bold text-lg text-gray-800 flex items-center gap-2">
+            <span>📦</span> Item Sales Breakdown
           </h2>
-          <span className="text-xs font-bold bg-amber-100 text-amber-700 px-2 py-1 rounded-full uppercase tracking-wide">
-            Hand Drip Only
+          <span className="text-xs font-bold bg-gray-100 text-gray-600 px-2 py-1 rounded-full uppercase tracking-wide">
+            All Items
           </span>
         </div>
         
-        {beanStats.length === 0 ? (
-          <div className="p-12 text-center text-slate-400">
-            <p className="text-3xl mb-2">🫘</p>
-            <p className="text-sm">No coffee bean sales recorded today.</p>
+        {itemStats.length === 0 ? (
+          <div className="p-12 text-center text-gray-400">
+            <p className="text-3xl mb-2">🏷️</p>
+            <p className="text-sm">{loading ? "Loading..." : "No item sales recorded today."}</p>
           </div>
         ) : (
           <div className="overflow-x-auto">
             <table className="w-full text-sm">
-              <thead className="bg-slate-50 text-slate-500 uppercase text-[10px] font-bold tracking-wider">
+              <thead className="bg-gray-50 text-gray-500 uppercase text-[10px] font-bold tracking-wider">
                 <tr>
-                  <th className="px-5 py-3 text-left">Bean Name</th>
-                  <th className="px-5 py-3 text-left">Variants</th>
+                  <th className="px-5 py-3 text-left">Item Name</th>
+                  <th className="px-5 py-3 text-left">Category</th>
                   <th className="px-5 py-3 text-right">Qty</th>
                   <th className="px-5 py-3 text-right">Revenue</th>
                 </tr>
               </thead>
-              <tbody className="divide-y divide-slate-50">
-                {beanStats.map(([name, rec]) => {
-                  const variants = Array.from(rec.variants.entries())
-                    .sort((a, b) => a[0] - b[0])
-                    .map(([g, q]) => (g ? `${g}g × ${q}` : `— × ${q}`))
+              <tbody className="divide-y divide-gray-50">
+                {itemStats.map((item, idx) => {
+                  // 簡單的變體顯示字串
+                  const variantsStr = Array.from(item.variants.entries())
+                    .map(([v, q]) => `${v}×${q}`)
                     .join(", ");
+
                   return (
-                    <tr key={name} className="group hover:bg-slate-50 transition-colors">
-                      <td className="px-5 py-4 font-medium text-slate-900">{name}</td>
-                      <td className="px-5 py-4 text-slate-500 font-mono text-xs">{variants || "—"}</td>
-                      <td className="px-5 py-4 text-right font-bold text-slate-700">{rec.qty}</td>
-                      <td className="px-5 py-4 text-right font-bold text-slate-900 group-hover:text-blue-600 transition-colors">
-                        MOP$ {fmtMoney(rec.revenue)}
+                    <tr key={`${item.name}-${idx}`} className="group hover:bg-gray-50 transition-colors">
+                      <td className="px-5 py-4">
+                        <div className="font-medium text-gray-900">{item.name}</div>
+                        {variantsStr && <div className="text-xs text-gray-400 mt-0.5">{variantsStr}</div>}
+                      </td>
+                      <td className="px-5 py-4 text-xs">
+                        <span className="inline-flex items-center px-2 py-1 rounded-md bg-gray-100 text-gray-600 font-medium">
+                          {item.category}
+                        </span>
+                      </td>
+                      <td className="px-5 py-4 text-right font-bold text-gray-700">{item.qty}</td>
+                      <td className="px-5 py-4 text-right font-bold text-gray-900 group-hover:text-blue-600 transition-colors">
+                        MOP$ {fmtMoney(item.revenue)}
                       </td>
                     </tr>
                   );
