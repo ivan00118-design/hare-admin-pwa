@@ -147,3 +147,15 @@ button, input, select, textarea {
 
 /* 工具類：需要時可套在特定容器上，進一步避免自動反色 */
 .no-auto-dark { color-scheme: light; }
+
+
+/* 確保 Status Bar 不會遮擋內容 */
+body {
+  padding-top: env(safe-area-inset-top);
+  /* padding-bottom 由 BottomNav 處理 */
+}
+
+/* 針對 Capacitor iOS 的特定優化 */
+.capacitor-ios body {
+  background-color: #ffffff; /* 避免下拉回彈看到黑色背景 */
+}
