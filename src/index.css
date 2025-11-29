@@ -2,24 +2,28 @@
 @tailwind components;
 @tailwind utilities;
 
-/* 定義安全區域變數 */
+/* 確保安全區域變數有預設值 */
 :root {
-  --sat: env(safe-area-inset-top);
-  --sab: env(safe-area-inset-bottom);
+  --sat: env(safe-area-inset-top, 0px);
+  --sab: env(safe-area-inset-bottom, 0px);
 }
 
-/* 強制重置 html 與 body，避免雙重捲軸 */
+/* 強制鎖定視窗，禁止彈性捲動 */
 html, body {
-  height: 100%;
   width: 100%;
+  height: 100%;
   margin: 0;
   padding: 0;
-  overflow: hidden; /* 禁止瀏覽器預設捲動，改由 AppShell 內部捲動 */
-  background-color: #f9fafb;
-  -webkit-tap-highlight-color: transparent;
+  overflow: hidden; /* 關鍵：禁止 body 捲動 */
+  background-color: #ffffff;
+  -webkit-text-size-adjust: 100%;
+  /* 避免點擊高亮背景 */
+  -webkit-tap-highlight-color: transparent; 
 }
 
 #root {
-  height: 100%;
   width: 100%;
+  height: 100%;
+  display: flex;
+  flex-direction: column;
 }
