@@ -1,161 +1,24 @@
-@import "tailwindcss";
-
-@layer base {
-  /* 可以放自定義全域樣式 */
-  /* 關閉 iOS 自動暗色化，並明確指定表單字色 */
-:root { color-scheme: light; }
-
-input, textarea, select {
-  color: #111 !important;
-  -webkit-text-fill-color: #111 !important; /* iOS WebKit 用這個值 */
-  background-color: #fff !important;
-  caret-color: #111 !important;
-}
-
-/* placeholder 顏色（可依需要微調）*/
-input::placeholder, textarea::placeholder {
-  color: #9ca3af !important;
-  opacity: 1 !important;
-}
-
-/* iOS 自動填入時也維持深色字 */
-input:-webkit-autofill, textarea:-webkit-autofill, select:-webkit-autofill {
-  -webkit-text-fill-color: #111 !important;
-}
-
-}
-
-@layer components {
-  /* 可以放自定義元件樣式 */
-}
-
-@layer utilities {
-  /* 可放自定義工具樣式 */
-}
-
-@layer components {
-  .card {
-    @apply bg-white rounded-xl shadow-md p-5 transition-all hover:shadow-lg;
-  }
-}
+/* 修改 src/index.css */
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
 
 :root {
-  font-family: system-ui, Avenir, Helvetica, Arial, sans-serif;
-  line-height: 1.5;
-  font-weight: 400;
-
-  color-scheme: light dark;
-  color: rgba(255, 255, 255, 0.87);
-  background-color: #242424;
-
-  font-synthesis: none;
-  text-rendering: optimizeLegibility;
-  -webkit-font-smoothing: antialiased;
-  -moz-osx-font-smoothing: grayscale;
-}
-
-a {
-  font-weight: 500;
-  color: #646cff;
-  text-decoration: inherit;
-}
-a:hover {
-  color: #535bf2;
+  /* 定義安全區域變數，預設為 0px (非手機環境) */
+  --sat: env(safe-area-inset-top, 0px);
+  --sab: env(safe-area-inset-bottom, 0px);
 }
 
 body {
-  margin: 0;
-  display: flex;
-  place-items: center;
-  min-width: 320px;
-  min-height: 100vh;
+  /* 讓整個 Body 避開手機頂部的狀態列 (瀏海) */
+  padding-top: var(--sat);
+  /* 背景設為白色，避免 iOS 下拉回彈時看到黑底 */
+  background-color: #ffffff; 
+  /* 禁止 iOS Safari 的彈性捲動效果 (橡皮筋效果)，讓它更像原生 App */
+  overscroll-behavior-y: none;
 }
 
-h1 {
-  font-size: 3.2em;
-  line-height: 1.1;
-}
-
-button {
-  border-radius: 8px;
-  border: 1px solid transparent;
-  padding: 0.6em 1.2em;
-  font-size: 1em;
-  font-weight: 500;
-  font-family: inherit;
-  background-color: #1a1a1a;
-  cursor: pointer;
-  transition: border-color 0.25s;
-}
-button:hover {
-  border-color: #646cff;
-}
-button:focus,
-button:focus-visible {
-  outline: 4px auto -webkit-focus-ring-color;
-}
-
-@media (prefers-color-scheme: light) {
-  :root {
-    color: #213547;
-    background-color: #ffffff;
-  }
-  a:hover {
-    color: #747bff;
-  }
-  button {
-    background-color: #f9f9f9;
-  }
-}
-
-/* 全站關閉 iOS/Safari 的自動深色處理 */
-:root, html, body, #root, #app {
-  color-scheme: light;
-}
-
-/* 可選：給整體一個明亮底色與文字色，避免瀏覽器用預設值推測 */
-body {
-  background-color: #f7fafc; /* 或 #fff，視你的設計 */
-  color: #111827;            /* Slate-900 類似的深灰 */
-}
-
-/* 保險：針對常見可互動元素個別指定（color-scheme 會繼承，但這樣更保險） */
-button, input, select, textarea {
-  color-scheme: light;
-}
-
-/* 全站固定淺色外觀，阻止 iOS/Safari 在深色模式自動反色 */
-:root,
-html,
-body,
+/* 確保全螢幕高度計算正確 */
 #root {
-  color-scheme: light;
-}
-
-/* 建議：指定全站基礎色，避免瀏覽器推測造成色差 */
-html, body {
-  background-color: #ffffff;   /* 你的主底色，可改 */
-  color: #111827;              /* 近 gray-900，可改 */
-}
-
-/* 原生表單元件：白底黑字 */
-button, input, select, textarea {
-  color-scheme: light;
-  background-color: #ffffff;
-  color: #111827;
-}
-
-/* 工具類：需要時可套在特定容器上，進一步避免自動反色 */
-.no-auto-dark { color-scheme: light; }
-
-
-/* 確保 Status Bar 不會遮擋內容 */
-body {
-  padding-top: env(safe-area-inset-top);
-  /* padding-bottom 由 BottomNav 處理 */
-}
-
-/* 針對 Capacitor iOS 的特定優化 */
-.capacitor-ios body {
-  background-color: #ffffff; /* 避免下拉回彈看到黑色背景 */
+  height: 100%;
 }
