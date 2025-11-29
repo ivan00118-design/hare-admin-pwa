@@ -2,6 +2,7 @@ import React from 'react';
 import { NavLink } from 'react-router-dom';
 
 export default function BottomNav() {
+  // 使用 Emoji 作為圖示，簡單且不需額外依賴
   const navItems = [
     { path: '/', label: 'Home', icon: '🏠' },
     { path: '/orders', label: 'Orders', icon: '🧾' },
@@ -10,8 +11,7 @@ export default function BottomNav() {
   ];
 
   return (
-    // 使用 backdrop-blur 製作毛玻璃效果，並加上精緻的上方陰影
-    <nav className="w-full bg-white/90 backdrop-blur-md border-t border-slate-100 shadow-[0_-4px_20px_rgba(0,0,0,0.04)]">
+    <nav className="w-full bg-white/90 backdrop-blur-md border-t border-gray-100 shadow-[0_-4px_20px_rgba(0,0,0,0.04)]">
       <div className="flex justify-around items-center h-[60px] px-2">
         {navItems.map((item) => (
           <NavLink
@@ -21,13 +21,12 @@ export default function BottomNav() {
               `flex flex-col items-center justify-center flex-1 h-full space-y-[2px] active-press transition-all duration-200 ${
                 isActive 
                   ? 'text-blue-600' 
-                  : 'text-slate-400 hover:text-slate-600'
+                  : 'text-gray-400 hover:text-gray-600'
               }`
             }
           >
             {({ isActive }) => (
               <>
-                {/* 選中時 Icon 會稍微放大或改變風格 */}
                 <span className={`text-2xl leading-none filter ${isActive ? 'drop-shadow-sm scale-110' : 'grayscale opacity-80'} transition-all`}>
                   {item.icon}
                 </span>
