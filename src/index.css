@@ -1,24 +1,25 @@
-/* 修改 src/index.css */
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
 
+/* 定義安全區域變數 */
 :root {
-  /* 定義安全區域變數，預設為 0px (非手機環境) */
-  --sat: env(safe-area-inset-top, 0px);
-  --sab: env(safe-area-inset-bottom, 0px);
+  --sat: env(safe-area-inset-top);
+  --sab: env(safe-area-inset-bottom);
 }
 
-body {
-  /* 讓整個 Body 避開手機頂部的狀態列 (瀏海) */
-  padding-top: var(--sat);
-  /* 背景設為白色，避免 iOS 下拉回彈時看到黑底 */
-  background-color: #ffffff; 
-  /* 禁止 iOS Safari 的彈性捲動效果 (橡皮筋效果)，讓它更像原生 App */
-  overscroll-behavior-y: none;
+/* 強制重置 html 與 body，避免雙重捲軸 */
+html, body {
+  height: 100%;
+  width: 100%;
+  margin: 0;
+  padding: 0;
+  overflow: hidden; /* 禁止瀏覽器預設捲動，改由 AppShell 內部捲動 */
+  background-color: #f9fafb;
+  -webkit-tap-highlight-color: transparent;
 }
 
-/* 確保全螢幕高度計算正確 */
 #root {
   height: 100%;
+  width: 100%;
 }
