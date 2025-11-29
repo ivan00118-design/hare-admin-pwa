@@ -1,20 +1,34 @@
-@tailwind base;
-@tailwind components;
-@tailwind utilities;
+@import "tailwindcss";
 
 :root {
   --sat: env(safe-area-inset-top, 0px);
   --sab: env(safe-area-inset-bottom, 0px);
 }
 
-/* 讓字體在手機上更清晰 */
-body {
-  @apply bg-slate-50 text-slate-900 antialiased;
+html, body {
+  height: 100%;
+  width: 100%;
+  margin: 0;
+  padding: 0;
+  overflow: hidden; /* 禁止瀏覽器預設捲動 */
+  
+  /* 使用標準 CSS 設定顏色，避免 @apply 錯誤 */
+  background-color: #f9fafb; /* gray-50 */
+  color: #111827; /* gray-900 */
+  
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
+  -webkit-tap-highlight-color: transparent;
 }
 
-/* 隱藏捲軸但保留捲動功能 (Chrome/Safari) */
+#root {
+  height: 100%;
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+}
+
+/* 隱藏捲軸但保留功能 */
 .no-scrollbar::-webkit-scrollbar {
   display: none;
 }
@@ -23,7 +37,7 @@ body {
   scrollbar-width: none;
 }
 
-/* 點擊時的微縮放效果 (類原生 App 體驗) */
+/* 點擊回饋效果 */
 .active-press:active {
   transform: scale(0.96);
   transition: transform 0.1s;
