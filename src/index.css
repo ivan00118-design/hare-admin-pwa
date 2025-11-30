@@ -1,6 +1,7 @@
 @import "tailwindcss";
 
 :root {
+  /* 定義安全區域變數 (iPhone 瀏海與 Home Bar) */
   --sat: env(safe-area-inset-top, 0px);
   --sab: env(safe-area-inset-bottom, 0px);
 }
@@ -10,14 +11,16 @@ html, body {
   width: 100%;
   margin: 0;
   padding: 0;
-  overflow: hidden; /* 禁止瀏覽器預設捲動 */
+  overflow: hidden; /* 禁止瀏覽器預設捲動，交給 AppShell 內部處理 */
   
-  /* 使用標準 CSS 設定顏色，避免 @apply 錯誤 */
+  /* 使用標準 CSS 設定背景與文字顏色，避免 @apply 錯誤 */
   background-color: #f9fafb; /* gray-50 */
   color: #111827; /* gray-900 */
   
+  /* 字體渲染優化 */
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
+  /* 移除手機點擊時的高亮背景 */
   -webkit-tap-highlight-color: transparent;
 }
 
@@ -28,16 +31,16 @@ html, body {
   flex-direction: column;
 }
 
-/* 隱藏捲軸但保留功能 */
+/* 隱藏捲軸但保留功能 (Chrome/Safari/Edge) */
 .no-scrollbar::-webkit-scrollbar {
   display: none;
 }
 .no-scrollbar {
-  -ms-overflow-style: none;
-  scrollbar-width: none;
+  -ms-overflow-style: none; /* IE/Edge */
+  scrollbar-width: none; /* Firefox */
 }
 
-/* 點擊回饋效果 */
+/* 按鈕點擊回饋效果 (縮放) */
 .active-press:active {
   transform: scale(0.96);
   transition: transform 0.1s;
