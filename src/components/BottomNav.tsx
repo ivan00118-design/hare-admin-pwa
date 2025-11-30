@@ -4,7 +4,7 @@ import { NavLink } from 'react-router-dom';
 export default function BottomNav() {
   // 使用 Emoji 作為圖示，風格統一且效能好
   const navItems = [
-    { path: '/', label: 'Home', icon: '🏠' },
+    { path: '/Dashboard', label: 'Home', icon: '🏠' },
     { path: '/orders', label: 'Orders', icon: '🧾' },
     { path: '/inventory', label: 'Items', icon: '📦' },
     { path: '/delivery', label: 'Ship', icon: '🚚' },
