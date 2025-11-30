@@ -1,6 +1,8 @@
 import React, { useEffect, useMemo, useState } from "react";
 import PosButton from "../components/PosButton";
 import { fetchOrders } from "../services/orders";
+// 引入 Logo 圖片
+import Logo from "../assets/logo.png";
 
 // 取得環境變數
 const WHATSAPP_PHONE = import.meta?.env?.VITE_WHATSAPP_PHONE || "";
@@ -54,11 +56,10 @@ function isDeliveryOrder(o: any): boolean {
   return (o?.channel || "") === "DELIVERY";
 }
 
-// 判斷商品是否為咖啡豆 (根據類別或名稱)
+// 判斷商品是否為咖啡豆
 function isCoffeeBean(item: any): boolean {
   const cat = (item.category || "").toLowerCase();
   const name = (item.name || "").toLowerCase();
-  // 關鍵字匹配：包含 HandDrip, Bean, Coffee, 豆, Drip
   return (
     cat.includes("handdrip") || 
     cat.includes("bean") || 
@@ -94,7 +95,7 @@ export default function Dashboard() {
     const base = new Date(picked);
     if (Number.isNaN(base.getTime())) return;
 
-    // 擴大搜尋範圍，確保不會漏掉時區邊界的訂單
+    // 擴大搜尋範圍
     const from = new Date(base);
     from.setDate(base.getDate() - 7);
     from.setHours(0, 0, 0, 0);
@@ -107,8 +108,7 @@ export default function Dashboard() {
     fetchOrders({
       from,
       to,
-      // 修改 1: 移除 status: "active"
-      // 這樣可以抓到 status 為 "completed" 或其他狀態的訂單
+      // 移除 status: "active" 以抓取所有狀態的訂單
       page: 0,
       pageSize: 2000, 
     })
@@ -120,10 +120,8 @@ export default function Dashboard() {
       .finally(() => setLoading(false));
   }, [picked]);
 
-  // 過濾掉已作廢 (voided) 的訂單，保留 active 和 completed
   const validOrders = useMemo(() => rows.filter((o: any) => !o?.voided), [rows]);
 
-  // 篩選出選定日期的訂單
   const ordersOfDay = useMemo(
     () => validOrders.filter((o) => orderDayKey(o) === picked),
     [validOrders, picked]
@@ -164,18 +162,17 @@ export default function Dashboard() {
     return Array.from(map.entries()).sort((a, b) => b[1] - a[1]);
   }, [ordersOfDay]);
 
-  // 修改 2: 只統計 Coffee Beans (HandDrip, Beans, etc.)
+  // 只統計 Coffee Beans
   const beanStats = useMemo(() => {
     const map = new Map<string, { qty: number; revenue: number; category: string, variants: Map<string, number> }>();
     
     for (const o of ordersOfDay) {
       for (const it of (o.items || []) as any[]) {
-        // 使用 isCoffeeBean 函數進行過濾
         if (!isCoffeeBean(it)) continue;
 
         const name = (it.name || "Unknown").trim();
         const cat = it.category || "Uncategorized";
-        const key = name; // 同名商品合併統計
+        const key = name;
 
         if (!map.has(key)) {
           map.set(key, { qty: 0, revenue: 0, category: cat, variants: new Map() });
@@ -258,24 +255,30 @@ export default function Dashboard() {
   return (
     <div className="space-y-6">
       
-      {/* 頂部標題與控制列 */}
+      {/* 頂部標題與控制列 (修改處：加入 Logo) */}
       <header className="flex flex-col md:flex-row md:items-end justify-between gap-4 pb-2">
-        <div>
-          <h1 className="text-3xl font-bold text-gray-900 tracking-tight">Dashboard</h1>
-          <p className="text-gray-500 text-sm mt-1 font-medium">Business Overview</p>
+        <div className="flex items-center gap-3">
+          {/* Logo 容器：圓角、陰影、白色背景 */}
+          <div className="w-12 h-12 bg-white rounded-xl shadow-sm border border-gray-100 p-1 flex items-center justify-center shrink-0">
+            <img src={Logo} alt="Logo" className="w-full h-full object-contain" />
+          </div>
+          <div>
+            <h1 className="text-3xl font-bold text-gray-900 tracking-tight leading-none">Dashboard</h1>
+            <p className="text-gray-500 text-sm mt-1 font-medium">Business Overview</p>
+          </div>
         </div>
         
-        <div className="flex items-center gap-2 bg-white p-1.5 rounded-xl border border-gray-200 shadow-sm">
+        <div className="flex items-center gap-2 bg-white p-1.5 rounded-xl border border-gray-200 shadow-sm self-start md:self-end w-full md:w-auto">
           <input
             type="date"
             value={picked}
             onChange={(e) => setPicked(e.target.value)}
-            className="h-10 border-0 bg-transparent text-gray-700 font-semibold focus:ring-0 text-sm px-2 cursor-pointer outline-none"
+            className="h-10 border-0 bg-transparent text-gray-700 font-semibold focus:ring-0 text-sm px-2 cursor-pointer outline-none flex-1 md:flex-none"
           />
           <div className="h-6 w-px bg-gray-200 mx-1"></div>
           <button
             onClick={sendToWhatsApp}
-            className="h-10 px-4 bg-gray-900 text-white text-sm font-semibold rounded-lg hover:bg-gray-800 active:scale-95 transition-all flex items-center gap-2"
+            className="h-10 px-4 bg-gray-900 text-white text-sm font-semibold rounded-lg hover:bg-gray-800 active:scale-95 transition-all flex items-center gap-2 whitespace-nowrap"
             title="Send Summary"
           >
             <span>🧾</span>
