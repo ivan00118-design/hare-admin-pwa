@@ -36,7 +36,7 @@ export default function Sidebar({ items = defaultItems, onSelect }: Props) {
       {items.map((it) => {
         // Dashboard 通常對應根路徑 "/" 或 "/dashboard"
         // 這裡確保 dashboard 指向 "/"，避免選中狀態判斷錯誤 (如果路由設定是 "/" 為 Dashboard)
-        const to = it.key === "dashboard" ? "/" : (keyToPath[it.key] ?? "/");
+        const to = it.key === "dashboard" ? "/" : (keyToPath[it.key] ?? "/Dashboard");
         
         return (
           <NavLink
