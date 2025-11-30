@@ -1,13 +1,12 @@
 import React, { useEffect, useMemo, useState } from "react";
-import PosButton from "../components/PosButton";
 import { fetchOrders } from "../services/orders";
-// 引入 Logo 圖片
+// 引入 Logo
 import Logo from "../assets/logo.png";
 
 // 取得環境變數
 const WHATSAPP_PHONE = import.meta?.env?.VITE_WHATSAPP_PHONE || "";
 
-// ---- utils -------------------------------------------------
+// ---- utils (保留原邏輯) -------------------------------------------------
 const fmtMoney = (n: number) => {
   const v = Number(n) || 0;
   const r = Math.round((v + Number.EPSILON) * 100) / 100;
@@ -26,17 +25,11 @@ const todayKey = () => toDayKey(new Date());
 function orderDayKey(o: any): string {
   const raw = o?.createdAt ?? o?.created_at;
   if (!raw) return "";
-
   if (raw instanceof Date) return toDayKey(raw);
   if (typeof raw === 'number') return toDayKey(new Date(raw));
-
   const s = String(raw);
-
-  // ISO 2025-11-23T...
   const iso = s.match(/^(\d{4})-(\d{2})-(\d{2})/);
   if (iso) return `${iso[1]}-${iso[2]}-${iso[3]}`;
-
-  // YYYY/MM/DD ...
   const slash = s.match(/^(\d{4})\/(\d{1,2})\/(\d{1,2})/);
   if (slash) {
     const y = slash[1];
@@ -44,8 +37,6 @@ function orderDayKey(o: any): string {
     const d = slash[3].padStart(2, "0");
     return `${y}-${m}-${d}`;
   }
-
-  // 最後手段
   const d = new Date(s);
   if (!Number.isNaN(d.getTime())) return toDayKey(d);
   return "";
@@ -56,7 +47,6 @@ function isDeliveryOrder(o: any): boolean {
   return (o?.channel || "") === "DELIVERY";
 }
 
-// 判斷商品是否為咖啡豆
 function isCoffeeBean(item: any): boolean {
   const cat = (item.category || "").toLowerCase();
   const name = (item.name || "").toLowerCase();
@@ -71,17 +61,52 @@ function isCoffeeBean(item: any): boolean {
 }
 
 // ------------------------------------------------------------
-// UI Components
+// 新版 UI 元件
 // ------------------------------------------------------------
-const StatCard = ({ title, value, subValue, icon, accentColor = "text-gray-900" }: any) => (
-  <div className="bg-white p-5 rounded-2xl shadow-[0_2px_8px_rgba(0,0,0,0.04)] border border-gray-100 flex flex-col justify-between h-36 active:scale-[0.98] transition-transform duration-200">
-    <div className="flex justify-between items-start">
-      <span className="text-gray-500 text-xs font-bold uppercase tracking-wider">{title}</span>
-      <span className="text-2xl filter drop-shadow-sm">{icon}</span>
+
+// 1. 數據卡片：加入顏色主題與圖示背景
+const StatCard = ({ title, value, subValue, icon, theme = "blue" }: any) => {
+  const themeStyles: any = {
+    blue: "bg-blue-50 text-blue-600",
+    emerald: "bg-emerald-50 text-emerald-600",
+    rose: "bg-rose-50 text-rose-600",
+    amber: "bg-amber-50 text-amber-600",
+    gray: "bg-gray-100 text-gray-600",
+  };
+  
+  const activeTheme = themeStyles[theme] || themeStyles.gray;
+
+  return (
+    <div className="bg-white p-4 rounded-2xl shadow-sm border border-gray-100 flex flex-col justify-between h-32 active:scale-95 transition-all duration-200">
+      <div className="flex justify-between items-start">
+        <div className={`w-10 h-10 rounded-xl flex items-center justify-center ${activeTheme}`}>
+          <span className="text-xl filter drop-shadow-sm">{icon}</span>
+        </div>
+      </div>
+      <div>
+        <p className="text-xs font-bold text-gray-400 uppercase tracking-wider mb-1">{title}</p>
+        <h3 className="text-2xl font-extrabold text-gray-900 tracking-tight leading-none">{value}</h3>
+        {subValue && <p className="text-[10px] text-gray-400 mt-1 font-medium truncate">{subValue}</p>}
+      </div>
     </div>
-    <div className="mt-auto">
-      <h3 className={`text-2xl font-bold ${accentColor} tracking-tight`}>{value}</h3>
-      {subValue && <p className="text-xs text-gray-400 mt-1 font-medium">{subValue}</p>}
+  );
+};
+
+// 2. 列表項目：取代傳統表格列
+const ListItem = ({ icon, title, subtitle, rightTop, rightBottom, iconBg = "bg-gray-100" }: any) => (
+  <div className="flex items-center justify-between p-4 hover:bg-gray-50 active:bg-gray-100 transition-colors border-b border-gray-50 last:border-0 cursor-default">
+    <div className="flex items-center gap-3 overflow-hidden">
+      <div className={`w-10 h-10 rounded-full flex items-center justify-center text-lg shrink-0 ${iconBg}`}>
+        {icon}
+      </div>
+      <div className="flex flex-col min-w-0">
+        <p className="font-semibold text-gray-900 text-sm truncate">{title}</p>
+        <p className="text-xs text-gray-500 truncate">{subtitle}</p>
+      </div>
+    </div>
+    <div className="text-right shrink-0 ml-2">
+      <p className="font-bold text-gray-900 text-sm">{rightTop}</p>
+      <p className="text-xs text-gray-400">{rightBottom}</p>
     </div>
   </div>
 );
@@ -95,7 +120,6 @@ export default function Dashboard() {
     const base = new Date(picked);
     if (Number.isNaN(base.getTime())) return;
 
-    // 擴大搜尋範圍
     const from = new Date(base);
     from.setDate(base.getDate() - 7);
     from.setHours(0, 0, 0, 0);
@@ -108,7 +132,6 @@ export default function Dashboard() {
     fetchOrders({
       from,
       to,
-      // 移除 status: "active" 以抓取所有狀態的訂單
       page: 0,
       pageSize: 2000, 
     })
@@ -162,7 +185,6 @@ export default function Dashboard() {
     return Array.from(map.entries()).sort((a, b) => b[1] - a[1]);
   }, [ordersOfDay]);
 
-  // 只統計 Coffee Beans
   const beanStats = useMemo(() => {
     const map = new Map<string, { qty: number; revenue: number; category: string, variants: Map<string, number> }>();
     
@@ -251,35 +273,33 @@ export default function Dashboard() {
     window.open(url, "_blank", "noopener,noreferrer");
   };
 
-  // ---- UI ---------------------------------------------------
+  // ---- UI Layout ---------------------------------------------------
   return (
-    <div className="space-y-6">
+    <div className="space-y-6 max-w-3xl mx-auto">
       
-      {/* 頂部標題與控制列 (修改處：加入 Logo) */}
+      {/* Header Area */}
       <header className="flex flex-col md:flex-row md:items-end justify-between gap-4 pb-2">
-        <div className="flex items-center gap-3">
-          {/* Logo 容器：圓角、陰影、白色背景 */}
-          <div className="w-12 h-12 bg-white rounded-xl shadow-sm border border-gray-100 p-1 flex items-center justify-center shrink-0">
+        <div className="flex items-center gap-4">
+          <div className="w-14 h-14 bg-white rounded-2xl shadow-sm border border-gray-100 p-2 flex items-center justify-center shrink-0">
             <img src={Logo} alt="Logo" className="w-full h-full object-contain" />
           </div>
           <div>
-            <h1 className="text-3xl font-bold text-gray-900 tracking-tight leading-none">Dashboard</h1>
-            <p className="text-gray-500 text-sm mt-1 font-medium">Business Overview</p>
+            <h1 className="text-3xl font-black text-gray-900 tracking-tight leading-none">Dashboard</h1>
+            <p className="text-gray-500 text-sm mt-1 font-medium tracking-wide">Business Overview</p>
           </div>
         </div>
         
-        <div className="flex items-center gap-2 bg-white p-1.5 rounded-xl border border-gray-200 shadow-sm self-start md:self-end w-full md:w-auto">
+        <div className="flex items-center gap-2 bg-white p-1.5 rounded-xl border border-gray-200 shadow-sm w-full md:w-auto">
           <input
             type="date"
             value={picked}
             onChange={(e) => setPicked(e.target.value)}
-            className="h-10 border-0 bg-transparent text-gray-700 font-semibold focus:ring-0 text-sm px-2 cursor-pointer outline-none flex-1 md:flex-none"
+            className="h-10 border-0 bg-transparent text-gray-700 font-bold focus:ring-0 text-sm px-3 cursor-pointer outline-none flex-1"
           />
           <div className="h-6 w-px bg-gray-200 mx-1"></div>
           <button
             onClick={sendToWhatsApp}
-            className="h-10 px-4 bg-gray-900 text-white text-sm font-semibold rounded-lg hover:bg-gray-800 active:scale-95 transition-all flex items-center gap-2 whitespace-nowrap"
-            title="Send Summary"
+            className="h-10 px-4 bg-gray-900 text-white text-sm font-bold rounded-lg hover:bg-gray-800 active:scale-95 transition-all flex items-center gap-2 whitespace-nowrap shadow-md shadow-gray-200"
           >
             <span>🧾</span>
             <span className="hidden sm:inline">Roll Shift</span>
@@ -287,132 +307,136 @@ export default function Dashboard() {
         </div>
       </header>
 
-      {/* 數據卡片區塊 */}
-      <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+      {/* KPI Cards Grid */}
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
         <StatCard 
-          title="Order Revenue" 
-          value={`$ ${fmtMoney(byType.orderRevenue)}`} 
-          subValue={`${byType.orderCount} orders · AOV $${fmtMoney(orderAOV)}`}
-          icon="💰" 
+          title="Revenue" 
+          value={`$${fmtMoney(byType.orderRevenue)}`} 
+          subValue={`${byType.orderCount} Orders`}
+          icon="💰"
+          theme="emerald"
         />
         <StatCard 
-          title="Delivery Revenue" 
-          value={`$ ${fmtMoney(byType.deliveryRevenue)}`} 
-          subValue={`${byType.deliveryCount} deliveries · AOV $${fmtMoney(deliveryAOV)}`}
+          title="Delivery" 
+          value={`$${fmtMoney(byType.deliveryRevenue)}`} 
+          subValue={`${byType.deliveryCount} Trips`}
           icon="🛵"
-          accentColor="text-rose-600"
+          theme="rose"
         />
         <StatCard 
           title="Total Orders" 
           value={byType.dayCount} 
-          subValue="Valid orders only"
-          icon="🧾" 
+          subValue="Valid Only"
+          icon="🧾"
+          theme="blue"
         />
         <StatCard 
-          title="Avg. Order Value" 
-          value={`$ ${fmtMoney(dayAOV)}`} 
-          subValue="Combined revenue / count"
-          icon="📊" 
+          title="Avg. Value" 
+          value={`$${fmtMoney(dayAOV)}`} 
+          subValue="Per Order"
+          icon="📊"
+          theme="amber"
         />
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-        {/* Payment Breakdown */}
-        <section className="bg-white rounded-3xl shadow-[0_2px_12px_rgba(0,0,0,0.04)] border border-gray-100 overflow-hidden">
-          <div className="p-5 border-b border-gray-50">
+        {/* Payment Breakdown Section */}
+        <section className="bg-white rounded-3xl shadow-sm border border-gray-100 overflow-hidden flex flex-col">
+          <div className="p-5 border-b border-gray-50 flex justify-between items-center">
             <h2 className="font-bold text-lg text-gray-800 flex items-center gap-2">
-              <span>💳</span> Payment Breakdown
+              <span className="bg-blue-50 text-blue-600 w-8 h-8 rounded-lg flex items-center justify-center text-sm">💳</span> 
+              Payments
             </h2>
           </div>
-          <div className="p-0">
+          <div className="flex-1">
             {paymentTotals.length === 0 ? (
-              <div className="p-8 text-center text-gray-400 text-sm">
-                {loading ? "Loading..." : "No payment records."}
-              </div>
+              <div className="p-10 text-center text-gray-400 text-sm">No records found.</div>
             ) : (
               <div className="divide-y divide-gray-50">
                 {paymentTotals.map(([method, amt]) => (
-                  <div key={method} className="p-4 flex items-center justify-between hover:bg-gray-50/50 transition-colors">
-                    <span className="text-sm font-medium text-gray-700">{method}</span>
-                    <span className="text-sm font-bold text-gray-900 bg-gray-100 px-2 py-1 rounded-md">
-                      MOP$ {fmtMoney(amt)}
-                    </span>
-                  </div>
+                  <ListItem 
+                    key={method}
+                    icon="💵"
+                    title={method}
+                    subtitle="Payment Method"
+                    rightTop={`MOP$ ${fmtMoney(amt)}`}
+                    rightBottom="Total"
+                    iconBg="bg-blue-50 text-blue-600"
+                  />
                 ))}
               </div>
             )}
           </div>
         </section>
 
-        {/* Last 4 Days Trend */}
-        <section className="bg-white rounded-3xl shadow-[0_2px_12px_rgba(0,0,0,0.04)] border border-gray-100 overflow-hidden">
-          <div className="p-5 border-b border-gray-50">
+        {/* Recent Trend Section */}
+        <section className="bg-white rounded-3xl shadow-sm border border-gray-100 overflow-hidden flex flex-col">
+          <div className="p-5 border-b border-gray-50 flex justify-between items-center">
             <h2 className="font-bold text-lg text-gray-800 flex items-center gap-2">
-              <span>📈</span> Recent Trend
+              <span className="bg-amber-50 text-amber-600 w-8 h-8 rounded-lg flex items-center justify-center text-sm">📈</span> 
+              Trend
             </h2>
+            <span className="text-xs font-bold text-gray-400 uppercase">Last 4 Days</span>
           </div>
-          <div className="divide-y divide-gray-50">
-            {last4.map((d) => (
-              <div key={d.day} className="p-4 flex items-center justify-between hover:bg-gray-50/50">
-                <div className="flex flex-col">
-                  <span className="text-sm font-bold text-gray-800">{d.day}</span>
-                  <span className="text-xs text-gray-400 font-medium">{d.count} Orders</span>
-                </div>
-                <span className={`text-sm font-bold ${d.day === picked ? 'text-blue-600' : 'text-gray-600'}`}>
-                  MOP$ {fmtMoney(d.revenue)}
-                </span>
-              </div>
-            ))}
+          <div className="flex-1">
+            <div className="divide-y divide-gray-50">
+              {last4.map((d) => (
+                <ListItem 
+                  key={d.day}
+                  icon="📅"
+                  title={d.day}
+                  subtitle={`${d.count} Orders`}
+                  rightTop={`MOP$ ${fmtMoney(d.revenue)}`}
+                  rightBottom={d.day === picked ? "Current" : "Past"}
+                  iconBg={d.day === picked ? "bg-amber-100 text-amber-600" : "bg-gray-100 text-gray-400"}
+                />
+              ))}
+            </div>
           </div>
         </section>
       </div>
 
-      {/* Coffee Beans Sold */}
-      <section className="bg-white rounded-3xl shadow-[0_2px_12px_rgba(0,0,0,0.04)] border border-gray-100 overflow-hidden">
+      {/* Coffee Beans Sold Section */}
+      <section className="bg-white rounded-3xl shadow-sm border border-gray-100 overflow-hidden">
         <div className="p-5 border-b border-gray-50 flex justify-between items-center">
-          <h2 className="font-bold text-lg text-gray-800 flex items-center gap-2">
-            <span>☕</span> Coffee Beans Sold
-          </h2>
-          <span className="text-xs font-bold bg-amber-100 text-amber-700 px-2 py-1 rounded-full uppercase tracking-wide">
-            Beans & Drip
+          <div className="flex items-center gap-3">
+            <div className="w-10 h-10 rounded-xl bg-orange-50 text-orange-600 flex items-center justify-center text-xl">
+              ☕
+            </div>
+            <div>
+              <h2 className="font-bold text-lg text-gray-800">Coffee Beans</h2>
+              <p className="text-xs text-gray-500">Beans & Drip Sales</p>
+            </div>
+          </div>
+          <span className="text-xs font-bold bg-gray-100 text-gray-500 px-3 py-1 rounded-full">
+            {beanStats.length} Items
           </span>
         </div>
         
         {beanStats.length === 0 ? (
           <div className="p-12 text-center text-gray-400">
-            <p className="text-3xl mb-2">🫘</p>
-            <p className="text-sm">{loading ? "Loading..." : "No coffee bean sales recorded today."}</p>
+            <p className="text-4xl mb-3 opacity-30">🫘</p>
+            <p className="text-sm font-medium">No coffee beans sold today.</p>
           </div>
         ) : (
-          <div className="overflow-x-auto">
-            <table className="w-full text-sm">
-              <thead className="bg-gray-50 text-gray-500 uppercase text-[10px] font-bold tracking-wider">
-                <tr>
-                  <th className="px-5 py-3 text-left">Bean Name</th>
-                  <th className="px-5 py-3 text-left">Variants</th>
-                  <th className="px-5 py-3 text-right">Qty</th>
-                  <th className="px-5 py-3 text-right">Revenue</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-gray-50">
-                {beanStats.map((item, idx) => {
-                  const variants = Array.from(item.variants.entries())
-                    .map(([v, q]) => `${v}×${q}`)
-                    .join(", ");
+          <div className="divide-y divide-gray-50">
+            {beanStats.map((item, idx) => {
+              const variants = Array.from(item.variants.entries())
+                .map(([v, q]) => `${v}×${q}`)
+                .join(", ");
 
-                  return (
-                    <tr key={`${item.name}-${idx}`} className="group hover:bg-gray-50 transition-colors">
-                      <td className="px-5 py-4 font-medium text-gray-900">{item.name}</td>
-                      <td className="px-5 py-4 text-gray-500 font-mono text-xs">{variants || "—"}</td>
-                      <td className="px-5 py-4 text-right font-bold text-gray-700">{item.qty}</td>
-                      <td className="px-5 py-4 text-right font-bold text-gray-900 group-hover:text-blue-600 transition-colors">
-                        MOP$ {fmtMoney(item.revenue)}
-                      </td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
+              return (
+                <ListItem 
+                  key={`${item.name}-${idx}`}
+                  icon="🫘"
+                  title={item.name}
+                  subtitle={variants || "Standard"}
+                  rightTop={`MOP$ ${fmtMoney(item.revenue)}`}
+                  rightBottom={`Qty: ${item.qty}`}
+                  iconBg="bg-orange-50 text-orange-600"
+                />
+              );
+            })}
           </div>
         )}
       </section>
