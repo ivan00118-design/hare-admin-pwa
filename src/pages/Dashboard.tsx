@@ -54,6 +54,21 @@ function isDeliveryOrder(o: any): boolean {
   return (o?.channel || "") === "DELIVERY";
 }
 
+// 判斷商品是否為咖啡豆 (根據類別或名稱)
+function isCoffeeBean(item: any): boolean {
+  const cat = (item.category || "").toLowerCase();
+  const name = (item.name || "").toLowerCase();
+  // 關鍵字匹配：包含 HandDrip, Bean, Coffee, 豆, Drip
+  return (
+    cat.includes("handdrip") || 
+    cat.includes("bean") || 
+    cat.includes("coffee") || 
+    cat.includes("drip") ||
+    name.includes("bean") || 
+    name.includes("豆")
+  );
+}
+
 // ------------------------------------------------------------
 // UI Components
 // ------------------------------------------------------------
@@ -79,21 +94,21 @@ export default function Dashboard() {
     const base = new Date(picked);
     if (Number.isNaN(base.getTime())) return;
 
-    // 修改：擴大搜尋範圍 (前後7天)，確保不會因時區問題漏掉訂單
+    // 擴大搜尋範圍，確保不會漏掉時區邊界的訂單
     const from = new Date(base);
     from.setDate(base.getDate() - 7);
     from.setHours(0, 0, 0, 0);
 
     const to = new Date(base);
-    to.setDate(base.getDate() + 2); // 多抓兩天比較保險
+    to.setDate(base.getDate() + 2);
     to.setHours(0, 0, 0, 0);
 
     setLoading(true);
     fetchOrders({
       from,
       to,
-      // 修改：移除 status: "active" 限制，抓取所有訂單後再於前端過濾
-      // 這樣可以避免因為後端狀態定義不同 (如 completed) 而漏單
+      // 修改 1: 移除 status: "active"
+      // 這樣可以抓到 status 為 "completed" 或其他狀態的訂單
       page: 0,
       pageSize: 2000, 
     })
@@ -105,9 +120,10 @@ export default function Dashboard() {
       .finally(() => setLoading(false));
   }, [picked]);
 
-  // 過濾掉已作廢 (voided) 的訂單
+  // 過濾掉已作廢 (voided) 的訂單，保留 active 和 completed
   const validOrders = useMemo(() => rows.filter((o: any) => !o?.voided), [rows]);
 
+  // 篩選出選定日期的訂單
   const ordersOfDay = useMemo(
     () => validOrders.filter((o) => orderDayKey(o) === picked),
     [validOrders, picked]
@@ -148,17 +164,18 @@ export default function Dashboard() {
     return Array.from(map.entries()).sort((a, b) => b[1] - a[1]);
   }, [ordersOfDay]);
 
-  // 修改：不再只過濾 HandDrip，而是統計所有銷售商品
-  const itemStats = useMemo(() => {
+  // 修改 2: 只統計 Coffee Beans (HandDrip, Beans, etc.)
+  const beanStats = useMemo(() => {
     const map = new Map<string, { qty: number; revenue: number; category: string, variants: Map<string, number> }>();
     
     for (const o of ordersOfDay) {
       for (const it of (o.items || []) as any[]) {
-        // 移除原本的 category 過濾器，讓所有商品都能顯示
+        // 使用 isCoffeeBean 函數進行過濾
+        if (!isCoffeeBean(it)) continue;
+
         const name = (it.name || "Unknown").trim();
         const cat = it.category || "Uncategorized";
-        // 使用 名稱+類別 作為 key，避免同名不同類別混淆
-        const key = `${name}::${cat}`;
+        const key = name; // 同名商品合併統計
 
         if (!map.has(key)) {
           map.set(key, { qty: 0, revenue: 0, category: cat, variants: new Map() });
@@ -171,7 +188,6 @@ export default function Dashboard() {
         rec.qty += q;
         rec.revenue += q * price;
 
-        // 嘗試抓取規格 (grams 或 variant 屬性)
         const variantInfo = it.grams ? `${it.grams}g` : (it.variant || "");
         if (variantInfo) {
            rec.variants.set(variantInfo, (rec.variants.get(variantInfo) || 0) + q);
@@ -179,9 +195,8 @@ export default function Dashboard() {
       }
     }
     
-    // 轉換回陣列並依營收排序
     return Array.from(map.entries())
-      .map(([k, v]) => ({ name: k.split('::')[0], ...v }))
+      .map(([k, v]) => ({ name: k, ...v }))
       .sort((a, b) => b.revenue - a.revenue);
   }, [ordersOfDay]);
 
@@ -218,14 +233,14 @@ export default function Dashboard() {
     if (paymentTotals.length === 0) lines.push("  - (none)");
     else for (const [method, amt] of paymentTotals) lines.push(`  - ${method}: $ ${fmtMoney(amt)}`);
     lines.push("");
-    lines.push("Item Sales Breakdown:");
-    if (itemStats.length === 0) lines.push("  - (none)");
+    lines.push("Coffee Beans Sold:");
+    if (beanStats.length === 0) lines.push("  - (none)");
     else {
-      for (const item of itemStats) {
+      for (const item of beanStats) {
         const variants = Array.from(item.variants.entries())
           .map(([v, q]) => `${v}×${q}`)
           .join(", ");
-        lines.push(`  - [${item.category}] ${item.name}: Qty ${item.qty} ${variants ? `(${variants}) ` : ""}— $ ${fmtMoney(item.revenue)}`);
+        lines.push(`  - ${item.name}: Qty ${item.qty} ${variants ? `(${variants}) ` : ""}— $ ${fmtMoney(item.revenue)}`);
       }
     }
     return lines.join("\n");
@@ -349,51 +364,43 @@ export default function Dashboard() {
         </section>
       </div>
 
-      {/* Item Sales Report (Replacing Coffee Beans Sold) */}
+      {/* Coffee Beans Sold */}
       <section className="bg-white rounded-3xl shadow-[0_2px_12px_rgba(0,0,0,0.04)] border border-gray-100 overflow-hidden">
         <div className="p-5 border-b border-gray-50 flex justify-between items-center">
           <h2 className="font-bold text-lg text-gray-800 flex items-center gap-2">
-            <span>📦</span> Item Sales Breakdown
+            <span>☕</span> Coffee Beans Sold
           </h2>
-          <span className="text-xs font-bold bg-gray-100 text-gray-600 px-2 py-1 rounded-full uppercase tracking-wide">
-            All Items
+          <span className="text-xs font-bold bg-amber-100 text-amber-700 px-2 py-1 rounded-full uppercase tracking-wide">
+            Beans & Drip
           </span>
         </div>
         
-        {itemStats.length === 0 ? (
+        {beanStats.length === 0 ? (
           <div className="p-12 text-center text-gray-400">
-            <p className="text-3xl mb-2">🏷️</p>
-            <p className="text-sm">{loading ? "Loading..." : "No item sales recorded today."}</p>
+            <p className="text-3xl mb-2">🫘</p>
+            <p className="text-sm">{loading ? "Loading..." : "No coffee bean sales recorded today."}</p>
           </div>
         ) : (
           <div className="overflow-x-auto">
             <table className="w-full text-sm">
               <thead className="bg-gray-50 text-gray-500 uppercase text-[10px] font-bold tracking-wider">
                 <tr>
-                  <th className="px-5 py-3 text-left">Item Name</th>
-                  <th className="px-5 py-3 text-left">Category</th>
+                  <th className="px-5 py-3 text-left">Bean Name</th>
+                  <th className="px-5 py-3 text-left">Variants</th>
                   <th className="px-5 py-3 text-right">Qty</th>
                   <th className="px-5 py-3 text-right">Revenue</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-gray-50">
-                {itemStats.map((item, idx) => {
-                  // 簡單的變體顯示字串
-                  const variantsStr = Array.from(item.variants.entries())
+                {beanStats.map((item, idx) => {
+                  const variants = Array.from(item.variants.entries())
                     .map(([v, q]) => `${v}×${q}`)
                     .join(", ");
 
                   return (
                     <tr key={`${item.name}-${idx}`} className="group hover:bg-gray-50 transition-colors">
-                      <td className="px-5 py-4">
-                        <div className="font-medium text-gray-900">{item.name}</div>
-                        {variantsStr && <div className="text-xs text-gray-400 mt-0.5">{variantsStr}</div>}
-                      </td>
-                      <td className="px-5 py-4 text-xs">
-                        <span className="inline-flex items-center px-2 py-1 rounded-md bg-gray-100 text-gray-600 font-medium">
-                          {item.category}
-                        </span>
-                      </td>
+                      <td className="px-5 py-4 font-medium text-gray-900">{item.name}</td>
+                      <td className="px-5 py-4 text-gray-500 font-mono text-xs">{variants || "—"}</td>
                       <td className="px-5 py-4 text-right font-bold text-gray-700">{item.qty}</td>
                       <td className="px-5 py-4 text-right font-bold text-gray-900 group-hover:text-blue-600 transition-colors">
                         MOP$ {fmtMoney(item.revenue)}
