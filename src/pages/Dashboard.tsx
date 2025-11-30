@@ -135,6 +135,7 @@ export default function Dashboard() {
     fetchOrders({
       from,
       to,
+      // 移除 status: "active"，確保能抓到 completed 或其他狀態的訂單
       page: 0,
       pageSize: 2000, 
     })
