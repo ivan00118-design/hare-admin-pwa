@@ -411,7 +411,6 @@ export default function Dashboard() {
             </div>
             <div>
               <h2 className="font-bold text-lg text-gray-800">Coffee Beans</h2>
-              <p className="text-xs text-gray-500">Beans & Drip Sales</p>
             </div>
           </div>
           <span className="text-xs font-bold bg-gray-100 text-gray-500 px-3 py-1 rounded-full">
