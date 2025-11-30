@@ -2,15 +2,16 @@ import React from 'react';
 import { NavLink } from 'react-router-dom';
 
 export default function BottomNav() {
-  // 使用 Emoji 作為圖示，簡單且不需額外依賴
+  // 使用 Emoji 作為圖示，風格統一且效能好
   const navItems = [
-    { path: '/Dashboard', label: 'Home', icon: '🏠' },
+    { path: '/', label: 'Home', icon: '🏠' },
     { path: '/orders', label: 'Orders', icon: '🧾' },
     { path: '/inventory', label: 'Items', icon: '📦' },
     { path: '/delivery', label: 'Ship', icon: '🚚' },
   ];
 
   return (
+    // 使用 backdrop-blur-md 製作毛玻璃效果，並加上頂部邊框與陰影
     <nav className="w-full bg-white/90 backdrop-blur-md border-t border-gray-100 shadow-[0_-4px_20px_rgba(0,0,0,0.04)]">
       <div className="flex justify-around items-center h-[60px] px-2">
         {navItems.map((item) => (
@@ -27,6 +28,7 @@ export default function BottomNav() {
           >
             {({ isActive }) => (
               <>
+                {/* 選中時圖示稍微放大並增加陰影 */}
                 <span className={`text-2xl leading-none filter ${isActive ? 'drop-shadow-sm scale-110' : 'grayscale opacity-80'} transition-all`}>
                   {item.icon}
                 </span>
@@ -39,7 +41,7 @@ export default function BottomNav() {
         ))}
       </div>
       
-      {/* 底部安全區 (Home Bar) */}
+      {/* 底部安全區填充 (Home Bar) */}
       <div style={{ height: 'var(--sab)' }} className="w-full bg-white/90 backdrop-blur-md" />
     </nav>
   );
