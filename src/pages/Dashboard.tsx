@@ -6,7 +6,7 @@ import Logo from "../assets/logo.png";
 // 取得環境變數
 const WHATSAPP_PHONE = import.meta?.env?.VITE_WHATSAPP_PHONE || "";
 
-// ---- utils (保留原邏輯) -------------------------------------------------
+// ---- Utils (保持不變) -------------------------------------------------
 const fmtMoney = (n: number) => {
   const v = Number(n) || 0;
   const r = Math.round((v + Number.EPSILON) * 100) / 100;
@@ -61,7 +61,7 @@ function isCoffeeBean(item: any): boolean {
 }
 
 // ------------------------------------------------------------
-// 新版 UI 元件
+// 新版 UI 元件 (對應預覽圖設計)
 // ------------------------------------------------------------
 
 // 1. 數據卡片：加入顏色主題與圖示背景
@@ -92,8 +92,8 @@ const StatCard = ({ title, value, subValue, icon, theme = "blue" }: any) => {
   );
 };
 
-// 2. 列表項目：取代傳統表格列
-const ListItem = ({ icon, title, subtitle, rightTop, rightBottom, iconBg = "bg-gray-100" }: any) => (
+// 2. 列表項目：取代傳統表格列，更適合手機閱讀
+const ListItem = ({ icon, title, subtitle, rightTop, rightBottom, iconBg = "bg-gray-100", textColor = "text-gray-900" }: any) => (
   <div className="flex items-center justify-between p-4 hover:bg-gray-50 active:bg-gray-100 transition-colors border-b border-gray-50 last:border-0 cursor-default">
     <div className="flex items-center gap-3 overflow-hidden">
       <div className={`w-10 h-10 rounded-full flex items-center justify-center text-lg shrink-0 ${iconBg}`}>
@@ -105,12 +105,15 @@ const ListItem = ({ icon, title, subtitle, rightTop, rightBottom, iconBg = "bg-g
       </div>
     </div>
     <div className="text-right shrink-0 ml-2">
-      <p className="font-bold text-gray-900 text-sm">{rightTop}</p>
+      <p className={`font-bold text-sm ${textColor}`}>{rightTop}</p>
       <p className="text-xs text-gray-400">{rightBottom}</p>
     </div>
   </div>
 );
 
+// ------------------------------------------------------------
+// 主頁面邏輯
+// ------------------------------------------------------------
 export default function Dashboard() {
   const [picked, setPicked] = useState(todayKey());
   const [rows, setRows] = useState<any[]>([]);
@@ -350,16 +353,18 @@ export default function Dashboard() {
           </div>
           <div className="flex-1">
             {paymentTotals.length === 0 ? (
-              <div className="p-10 text-center text-gray-400 text-sm">No records found.</div>
+              <div className="p-10 text-center text-gray-400 text-sm">
+                {loading ? "Loading..." : "No payment records."}
+              </div>
             ) : (
               <div className="divide-y divide-gray-50">
                 {paymentTotals.map(([method, amt]) => (
                   <ListItem 
                     key={method}
-                    icon="💵"
+                    icon={method.toLowerCase().includes('cash') ? '💵' : '📱'}
                     title={method}
                     subtitle="Payment Method"
-                    rightTop={`MOP$ ${fmtMoney(amt)}`}
+                    rightTop={`$ ${fmtMoney(amt)}`}
                     rightBottom="Total"
                     iconBg="bg-blue-50 text-blue-600"
                   />
@@ -386,9 +391,10 @@ export default function Dashboard() {
                   icon="📅"
                   title={d.day}
                   subtitle={`${d.count} Orders`}
-                  rightTop={`MOP$ ${fmtMoney(d.revenue)}`}
+                  rightTop={`$ ${fmtMoney(d.revenue)}`}
                   rightBottom={d.day === picked ? "Current" : "Past"}
                   iconBg={d.day === picked ? "bg-amber-100 text-amber-600" : "bg-gray-100 text-gray-400"}
+                  textColor={d.day === picked ? "text-amber-600" : "text-gray-900"}
                 />
               ))}
             </div>
@@ -416,7 +422,7 @@ export default function Dashboard() {
         {beanStats.length === 0 ? (
           <div className="p-12 text-center text-gray-400">
             <p className="text-4xl mb-3 opacity-30">🫘</p>
-            <p className="text-sm font-medium">No coffee beans sold today.</p>
+            <p className="text-sm font-medium">{loading ? "Loading..." : "No coffee beans sold today."}</p>
           </div>
         ) : (
           <div className="divide-y divide-gray-50">
@@ -431,7 +437,7 @@ export default function Dashboard() {
                   icon="🫘"
                   title={item.name}
                   subtitle={variants || "Standard"}
-                  rightTop={`MOP$ ${fmtMoney(item.revenue)}`}
+                  rightTop={`$ ${fmtMoney(item.revenue)}`}
                   rightBottom={`Qty: ${item.qty}`}
                   iconBg="bg-orange-50 text-orange-600"
                 />
