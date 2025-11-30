@@ -93,10 +93,10 @@ const StatCard = ({ title, value, subValue, icon, theme = "blue" }: any) => {
 };
 
 // 2. 列表項目：取代傳統表格列，更適合手機閱讀
-const ListItem = ({ icon, title, subtitle, rightTop, rightBottom}: any) => (
+const ListItem = ({ icon, title, subtitle, rightTop, rightBottom, iconBg = "bg-gray-100", textColor = "text-gray-900" }: any) => (
   <div className="flex items-center justify-between p-4 hover:bg-gray-50 active:bg-gray-100 transition-colors border-b border-gray-50 last:border-0 cursor-default">
     <div className="flex items-center gap-3 overflow-hidden">
-      <div className={`w-10 h-10 rounded-full flex items-center justify-center text-lg shrink-0 $`}>
+      <div className={`w-10 h-10 rounded-full flex items-center justify-center text-lg shrink-0 ${iconBg}`}>
         {icon}
       </div>
       <div className="flex flex-col min-w-0">
@@ -304,7 +304,7 @@ export default function Dashboard() {
             onClick={sendToWhatsApp}
             className="h-10 px-4 bg-gray-900 text-white text-sm font-bold rounded-lg hover:bg-gray-800 active:scale-95 transition-all flex items-center gap-2 whitespace-nowrap shadow-md shadow-gray-200"
           >
-            <span></span>
+            <span>🧾</span>
             <span className="hidden sm:inline">Roll Shift</span>
           </button>
         </div>
@@ -316,24 +316,28 @@ export default function Dashboard() {
           title="Revenue" 
           value={`$${fmtMoney(byType.orderRevenue)}`} 
           subValue={`${byType.orderCount} Orders`}
+          icon="💰"
           theme="emerald"
         />
         <StatCard 
           title="Delivery" 
           value={`$${fmtMoney(byType.deliveryRevenue)}`} 
           subValue={`${byType.deliveryCount} Trips`}
+          icon="🛵"
           theme="rose"
         />
         <StatCard 
           title="Total Orders" 
           value={byType.dayCount} 
           subValue="Valid Only"
+          icon="🧾"
           theme="blue"
         />
         <StatCard 
           title="Avg. Value" 
           value={`$${fmtMoney(dayAOV)}`} 
           subValue="Per Order"
+          icon="📊"
           theme="amber"
         />
       </div>
@@ -343,7 +347,7 @@ export default function Dashboard() {
         <section className="bg-white rounded-3xl shadow-sm border border-gray-100 overflow-hidden flex flex-col">
           <div className="p-5 border-b border-gray-50 flex justify-between items-center">
             <h2 className="font-bold text-lg text-gray-800 flex items-center gap-2">
-              <span className="bg-blue-50 text-blue-600 w-8 h-8 rounded-lg flex items-center justify-center text-sm"></span> 
+              <span className="bg-blue-50 text-blue-600 w-8 h-8 rounded-lg flex items-center justify-center text-sm">💳</span> 
               Payments
             </h2>
           </div>
@@ -357,10 +361,12 @@ export default function Dashboard() {
                 {paymentTotals.map(([method, amt]) => (
                   <ListItem 
                     key={method}
+                    icon={method.toLowerCase().includes('cash') ? '💵' : '📱'}
                     title={method}
                     subtitle="Payment Method"
                     rightTop={`$ ${fmtMoney(amt)}`}
                     rightBottom="Total"
+                    iconBg="bg-blue-50 text-blue-600"
                   />
                 ))}
               </div>
@@ -372,7 +378,7 @@ export default function Dashboard() {
         <section className="bg-white rounded-3xl shadow-sm border border-gray-100 overflow-hidden flex flex-col">
           <div className="p-5 border-b border-gray-50 flex justify-between items-center">
             <h2 className="font-bold text-lg text-gray-800 flex items-center gap-2">
-              <span className="bg-amber-50 text-amber-600 w-8 h-8 rounded-lg flex items-center justify-center text-sm"></span> 
+              <span className="bg-amber-50 text-amber-600 w-8 h-8 rounded-lg flex items-center justify-center text-sm">📈</span> 
               Trend
             </h2>
             <span className="text-xs font-bold text-gray-400 uppercase">Last 4 Days</span>
@@ -382,11 +388,12 @@ export default function Dashboard() {
               {last4.map((d) => (
                 <ListItem 
                   key={d.day}
-                  icon=""
+                  icon="📅"
                   title={d.day}
                   subtitle={`${d.count} Orders`}
                   rightTop={`$ ${fmtMoney(d.revenue)}`}
                   rightBottom={d.day === picked ? "Current" : "Past"}
+                  iconBg={d.day === picked ? "bg-amber-100 text-amber-600" : "bg-gray-100 text-gray-400"}
                   textColor={d.day === picked ? "text-amber-600" : "text-gray-900"}
                 />
               ))}
@@ -400,10 +407,11 @@ export default function Dashboard() {
         <div className="p-5 border-b border-gray-50 flex justify-between items-center">
           <div className="flex items-center gap-3">
             <div className="w-10 h-10 rounded-xl bg-orange-50 text-orange-600 flex items-center justify-center text-xl">
-              
+              ☕
             </div>
             <div>
               <h2 className="font-bold text-lg text-gray-800">Coffee Beans</h2>
+              <p className="text-xs text-gray-500">Beans & Drip Sales</p>
             </div>
           </div>
           <span className="text-xs font-bold bg-gray-100 text-gray-500 px-3 py-1 rounded-full">
@@ -426,10 +434,12 @@ export default function Dashboard() {
               return (
                 <ListItem 
                   key={`${item.name}-${idx}`}
+                  icon="🫘"
                   title={item.name}
                   subtitle={variants || "Standard"}
                   rightTop={`$ ${fmtMoney(item.revenue)}`}
                   rightBottom={`Qty: ${item.qty}`}
+                  iconBg="bg-orange-50 text-orange-600"
                 />
               );
             })}
