@@ -93,10 +93,10 @@ const StatCard = ({ title, value, subValue, icon, theme = "blue" }: any) => {
 };
 
 // 2. 列表項目：取代傳統表格列，更適合手機閱讀
-const ListItem = ({ icon, title, subtitle, rightTop, rightBottom, iconBg = "bg-gray-100", textColor = "text-gray-900" }: any) => (
+const ListItem = ({ icon, title, subtitle, rightTop, rightBottom}: any) => (
   <div className="flex items-center justify-between p-4 hover:bg-gray-50 active:bg-gray-100 transition-colors border-b border-gray-50 last:border-0 cursor-default">
     <div className="flex items-center gap-3 overflow-hidden">
-      <div className={`w-10 h-10 rounded-full flex items-center justify-center text-lg shrink-0 ${iconBg}`}>
+      <div className={`w-10 h-10 rounded-full flex items-center justify-center text-lg shrink-0 $`}>
         {icon}
       </div>
       <div className="flex flex-col min-w-0">
@@ -361,7 +361,6 @@ export default function Dashboard() {
                     subtitle="Payment Method"
                     rightTop={`$ ${fmtMoney(amt)}`}
                     rightBottom="Total"
-                    iconBg="bg-blue-50 text-blue-600"
                   />
                 ))}
               </div>
@@ -388,7 +387,6 @@ export default function Dashboard() {
                   subtitle={`${d.count} Orders`}
                   rightTop={`$ ${fmtMoney(d.revenue)}`}
                   rightBottom={d.day === picked ? "Current" : "Past"}
-                  iconBg={d.day === picked ? "bg-amber-100 text-amber-600" : "bg-gray-100 text-gray-400"}
                   textColor={d.day === picked ? "text-amber-600" : "text-gray-900"}
                 />
               ))}
@@ -432,7 +430,6 @@ export default function Dashboard() {
                   subtitle={variants || "Standard"}
                   rightTop={`$ ${fmtMoney(item.revenue)}`}
                   rightBottom={`Qty: ${item.qty}`}
-                  iconBg="bg-orange-50 text-orange-600"
                 />
               );
             })}
