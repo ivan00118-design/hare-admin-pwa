@@ -16,6 +16,7 @@ export type PlainOrder = {
   createdAt: string;
   items: PlainOrderItem[];
   total: number;
+  discount: number; // 【新增】折扣金額欄位
 };
 
 type OrdersContextValue = {
