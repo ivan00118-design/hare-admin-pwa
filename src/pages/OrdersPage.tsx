@@ -23,6 +23,9 @@ export default function OrdersPage() {
               <tr>
                 <th className="px-3 py-2 text-left">Time</th>
                 <th className="px-3 py-2 text-left">Items</th>
+                {/* 【新增】小計和折扣標題 */}
+                <th className="px-3 py-2 text-right">Subtotal</th>
+                <th className="px-3 py-2 text-right">Discount</th>
                 <th className="px-3 py-2 text-right">Total</th>
               </tr>
             </thead>
@@ -43,6 +46,18 @@ export default function OrdersPage() {
                         </li>
                       ))}
                     </ul>
+                  </td>
+                  {/* 【新增】顯示計算後的小計 (Total + Discount) */}
+                  <td className="px-3 py-2 text-right text-gray-600">
+                    $ {fmtMoney(o.total + (o.discount || 0))}
+                  </td>
+                  {/* 【新增】顯示折扣金額，若有折扣則顯示綠色 */}
+                  <td className="px-3 py-2 text-right">
+                    {o.discount && o.discount > 0 ? (
+                      <span className="text-green-600 font-bold">- $ {fmtMoney(o.discount)}</span>
+                    ) : (
+                      <span className="text-gray-400">-</span>
+                    )}
                   </td>
                   <td className="px-3 py-2 text-right font-bold text-red-600">$ {fmtMoney(o.total)}</td>
                 </tr>
