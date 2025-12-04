@@ -98,7 +98,8 @@ export async function fetchOrders(opts: FetchOrdersOpts = {}) {
   let q = supabase
     .from("orders")
     .select(
-      "id, created_at, status, payment_method, total, channel, is_delivery, delivery_fee, delivery_info, voided, order_items(name, sku, qty, price, category, grams, sub_key)"
+      // 【修改】新增 discount 欄位
+      "id, created_at, status, payment_method, total, discount, channel, is_delivery, delivery_fee, delivery_info, voided, order_items(name, sku, qty, price, category, grams, sub_key)"
     )
     .order("created_at", { ascending: true });
 
@@ -124,6 +125,7 @@ export async function fetchOrders(opts: FetchOrdersOpts = {}) {
       status: r.status,
       paymentMethod: r.payment_method,
       total: Number(r.total || 0),
+      discount: Number(r.discount || 0), // 【修改】讀取 discount
       // 僅以 channel 判定交付型態（避免誤判）
       channel: r.channel as "IN_STORE" | "DELIVERY" | null,
       isDelivery: (r.channel as string) === "DELIVERY",
@@ -149,17 +151,22 @@ export async function fetchOrders(opts: FetchOrdersOpts = {}) {
 export async function placeOrder(
   items: PlaceOrderItem[],
   paymentMethod = "Cash",
-  status: "ACTIVE" | "VOID" = "ACTIVE"
+  status: "ACTIVE" | "VOID" = "ACTIVE",
+  discount = 0 // 【新增】折扣參數
 ): Promise<string> {
   if (!Array.isArray(items) || items.length === 0) throw new Error("items empty");
 
-  const total = sum(items);
+  const subTotal = sum(items);
+  const finalDiscount = Number(discount || 0);
+  // 【修改】計算扣除折扣後的總金額
+  const total = Math.max(0, subTotal - finalDiscount);
 
   const { data: ord, error } = await supabase
     .from("orders")
     .insert({
       payment_method: paymentMethod,
       total,
+      discount: finalDiscount, // 【修改】寫入 discount
       channel: "IN_STORE",
       is_delivery: false,
       delivery_fee: 0,
@@ -198,11 +205,16 @@ export async function placeDelivery(
   paymentMethod = "Cash",
   deliveryInfo: Record<string, any> = {},
   deliveryFee = 0,
-  status: "ACTIVE" | "VOID" = "ACTIVE"
+  status: "ACTIVE" | "VOID" = "ACTIVE",
+  discount = 0 // 【新增】折扣參數
 ): Promise<string> {
   if (!Array.isArray(items) || items.length === 0) throw new Error("items empty");
 
-  const total = sum(items) + Number(deliveryFee || 0);
+  const subTotal = sum(items);
+  const finalDiscount = Number(discount || 0);
+  const totalWithoutFee = Math.max(0, subTotal - finalDiscount);
+  // 【修改】計算扣除折扣並加上運費後的總金額
+  const total = totalWithoutFee + Number(deliveryFee || 0);
 
   const info = {
     ...deliveryInfo,
@@ -214,6 +226,7 @@ export async function placeDelivery(
     .insert({
       payment_method: paymentMethod,
       total,
+      discount: finalDiscount, // 【修改】寫入 discount
       channel: "DELIVERY",
       is_delivery: true,
       delivery_fee: deliveryFee || 0,
